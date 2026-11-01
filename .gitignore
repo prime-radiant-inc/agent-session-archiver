@@ -1,0 +1,8 @@
+/bin/
+/archive/
+/staging/
+/local/
+*.db
+*.db-wal
+*.db-shm
+.env

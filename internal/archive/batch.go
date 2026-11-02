@@ -15,6 +15,11 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 	if err := os.MkdirAll(batch, 0700); err != nil {
 		return err
 	}
+	type captured struct {
+		path   string
+		member Member
+	}
+	copies := map[string]captured{}
 	for i := range traces {
 		m := &traces[i]
 		for j := range m.Members {
@@ -32,6 +37,20 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 			}
 			if err := safeSource(sourceRoot, source); err != nil {
 				return err
+			}
+			key, e := filepath.EvalSymlinks(source)
+			if e != nil {
+				return e
+			}
+			dest := filepath.Join(batch, m.Dir(), "raw", v.Path)
+			if prior, ok := copies[key]; ok && prior.member.Mutable == v.Mutable {
+				if e = installLink(prior.path, dest); e != nil {
+					return e
+				}
+				v.Size = prior.member.Size
+				v.Mtime = prior.member.Mtime
+				v.SHA256 = prior.member.SHA256
+				continue
 			}
 			f, e := os.Open(source)
 			if e != nil {
@@ -53,6 +72,7 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 				v.Mtime = 0
 			}
 			v.SHA256 = sum
+			copies[key] = captured{dest, *v}
 		}
 	}
 	return writeJSON(filepath.Join(batch, "batch.json"), traces)

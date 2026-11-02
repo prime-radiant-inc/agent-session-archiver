@@ -28,7 +28,8 @@ Codex's shared session index is captured once per root as a metadata trace under
 ## Incorporation and recovery
 
 Destination batches live under .incoming/batch-*. A ready.json contains the durable
-intended manifests only after every captured or reused member verifies. Completed
+intended manifests only after every captured or reused member verifies. A complete
+batch.json-only transfer can also be verified and promoted during recovery. Completed
 transfers are replayed before discovery, even when the original sources disappeared.
 A per-host advisory lock rejects overlapping writers. Raw files publish through
 synced temporary files and rename; trace.json follows. Readers should run after sync.
@@ -64,7 +65,9 @@ Pull --all runs sequentially and continues after a failed host. Reported selecte
 counts are traces requiring transfer, not a promise of successful incorporation;
 check exit status. Source batches use the source process's TMPDIR and are removed
 only after success. Interrupted transfers leave incoming staging for inspection;
-only ready batches are replayed, so incomplete network transfers never publish.
+recovery verifies an unacknowledged batch before replaying it, so incomplete
+network transfers never publish. Recovery is scoped to the selected host; another
+host's retained conflict does not block it.
 
 ## Development checks
 
@@ -96,3 +99,13 @@ uses an installed AgentsView and isolated HOME/data directories. It copies retai
 Claude bytes into one native-layout view, verifies the imported session count and
 rechecks the source archive. This proves that import path only; historical OpenCode
 snapshot aggregation and complete multi-harness viewer imports remain separate work.
+
+## Shared companion files
+
+Stable copies inside a batch and identical files incorporated by that batch can share
+filesystem hard links. rsync preserves those links. Live source files are never
+hard-linked into staging or the archive. Updates use temporary files and rename,
+which detach the updated path rather than changing other traces' retained bytes.
+Treat archive raw files as immutable; restore by copying before editing. Filesystems
+that cannot create a link fall back to copying. This saves shared Claude tool-result
+space without a separate object store or persistent index.

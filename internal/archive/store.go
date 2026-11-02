@@ -137,7 +137,13 @@ func checkMember(p string, v Member) error {
 	}
 	return nil
 }
-func batchMembers(root, batch string, traces []Manifest) error {
+func placed(m Manifest, existing map[string]Manifest) Manifest {
+	if old, ok := existing[m.ID]; ok {
+		m.Project = old.Project
+	}
+	return m
+}
+func batchMembers(root, batch string, traces []Manifest, existing map[string]Manifest) error {
 	seen := map[string]bool{}
 	for _, m := range traces {
 		if e := validateManifest(m); e != nil {
@@ -154,7 +160,7 @@ func batchMembers(root, batch string, traces []Manifest) error {
 				return e
 			}
 			if _, e = os.Stat(p); os.IsNotExist(e) {
-				p, e = checkedPath(root, rel)
+				p, e = checkedPath(root, filepath.Join(placed(m, existing).Dir(), "raw", v.Path))
 				if e != nil {
 					return e
 				}
@@ -176,7 +182,11 @@ func MarkReady(root, batch string) error {
 	if e != nil {
 		return e
 	}
-	if e = batchMembers(root, batch, m); e != nil {
+	existing, e := LoadManifests(root)
+	if e != nil {
+		return e
+	}
+	if e = batchMembers(root, batch, m, existing); e != nil {
 		return e
 	}
 	// Rewriting the intended manifests durably is the recovery evidence.
@@ -215,14 +225,18 @@ func incorporate(root, batch string, install func(string, string) error) error {
 		return e
 	}
 	defer release()
-	if e = batchMembers(root, batch, traces); e != nil {
+	existing, e := LoadManifests(root)
+	if e != nil {
+		return e
+	}
+	if e = batchMembers(root, batch, traces, existing); e != nil {
 		return e
 	}
 	// Preflight every update before publishing any file from the batch.
 	for _, m := range traces {
 		for _, v := range m.Members {
 			rel := filepath.Join(m.Dir(), "raw", v.Path)
-			dest, e := checkedPath(root, rel)
+			dest, e := checkedPath(root, filepath.Join(placed(m, existing).Dir(), "raw", v.Path))
 			if e != nil {
 				return e
 			}
@@ -241,10 +255,11 @@ func incorporate(root, batch string, install func(string, string) error) error {
 			}
 		}
 	}
+	installed := map[string]string{}
 	for _, m := range traces {
 		for _, v := range m.Members {
 			rel := filepath.Join(m.Dir(), "raw", v.Path)
-			dest, e := checkedPath(root, rel)
+			dest, e := checkedPath(root, filepath.Join(placed(m, existing).Dir(), "raw", v.Path))
 			if e != nil {
 				return e
 			}
@@ -258,12 +273,20 @@ func incorporate(root, batch string, install func(string, string) error) error {
 				return e
 			}
 			if e = checkMember(dest, v); e == nil {
+				installed[v.SHA256] = dest
 				continue
 			}
-			if e = install(src, dest); e != nil {
+			if prior, ok := installed[v.SHA256]; ok {
+				e = installLink(prior, dest)
+			} else {
+				e = install(src, dest)
+			}
+			if e != nil {
 				return e
 			}
+			installed[v.SHA256] = dest
 		}
+		m = placed(m, existing)
 		path, e := checkedPath(root, filepath.Join(m.Dir(), m.metadataName()))
 		if e != nil {
 			return e
@@ -351,7 +374,8 @@ func checkPrefix(old, new string) error {
 		}
 	}
 }
-func Recover(root string) error {
+func Recover(root string) error { return recoverHost(root, "", "") }
+func recoverHost(root, user, host string) error {
 	p, e := checkedPath(root, ".incoming")
 	if e != nil {
 		return e
@@ -369,10 +393,42 @@ func Recover(root string) error {
 			continue
 		}
 		batch := filepath.Join(p, v.Name())
-		if _, e = os.Stat(filepath.Join(batch, "ready.json")); e == nil {
-			if e = Incorporate(root, batch); e != nil {
-				errs = append(errs, fmt.Errorf("recover %s: %w", batch, e))
+		raw, e := os.ReadFile(filepath.Join(batch, "ready.json"))
+		ready := e == nil
+		if os.IsNotExist(e) {
+			raw, e = os.ReadFile(filepath.Join(batch, "batch.json"))
+		}
+		if os.IsNotExist(e) {
+			continue
+		}
+		if e != nil {
+			errs = append(errs, e)
+			continue
+		}
+		var traces []Manifest
+		if e = json.Unmarshal(raw, &traces); e != nil {
+			if ready {
+				errs = append(errs, e)
 			}
+			continue
+		}
+		if user != "" && len(traces) > 0 && (traces[0].User != user || traces[0].Host != host) {
+			continue
+		}
+		if !ready {
+			existing, e := LoadManifests(root)
+			if e != nil {
+				errs = append(errs, e)
+				continue
+			}
+			// A complete transfer can be recovered even if the initiating process
+			// never got to acknowledge rsync. Incomplete transfers stay staged.
+			if e = batchMembers(root, batch, traces, existing); e != nil {
+				continue
+			}
+		}
+		if e = Incorporate(root, batch); e != nil {
+			errs = append(errs, fmt.Errorf("recover %s: %w", batch, e))
 		}
 	}
 	return errors.Join(errs...)
@@ -452,4 +508,32 @@ func Verify(root string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// installLink shares only stable tool-owned copies. Rename-based updates detach
+// one trace without changing another trace's retained bytes.
+func installLink(src, dest string) error {
+	if e := os.MkdirAll(filepath.Dir(dest), 0700); e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(filepath.Dir(dest), ".link-")
+	if e != nil {
+		return e
+	}
+	tmp := f.Name()
+	f.Close()
+	os.Remove(tmp)
+	defer os.Remove(tmp)
+	if e = os.Link(src, tmp); e != nil {
+		return installFile(src, dest)
+	}
+	if e = os.Rename(tmp, dest); e != nil {
+		return e
+	}
+	d, e := os.Open(filepath.Dir(dest))
+	if e != nil {
+		return e
+	}
+	defer d.Close()
+	return d.Sync()
 }

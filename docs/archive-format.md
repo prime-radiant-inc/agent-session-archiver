@@ -16,3 +16,7 @@ and raw/opencode.db within each user/host directory. Session trace manifests ref
 the snapshot hash and native session ID. Each distinct database snapshot is retained
 once; older snapshots are never automatically removed. Source manifests are verified
 alongside session manifests, and missing references fail verification.
+
+Raw paths are ordinary files, and byte-identical companions may share an inode within
+a captured batch. Their manifests remain independent. Writers replace paths through
+rename and never modify linked contents in place. Copy files out before editing.

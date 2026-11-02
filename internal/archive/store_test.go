@@ -138,3 +138,59 @@ func TestDiskFullLeavesCommittedData(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestSharedCompanionsUseIndependentArchiveLinks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "archive")
+	source := filepath.Join(t.TempDir(), "tool-result")
+	put(t, source, "shared bytes")
+	var traces []Manifest
+	for _, id := range []string{"one", "two"} {
+		m := Manifest{Version: 1, User: "u", Host: "h", Harness: "claude", Root: filepath.Dir(source), NativeID: id, Project: "project"}
+		m.ID = TraceID(m.User, m.Host, m.Harness, m.Root, id)
+		addMember(&m, source, "tool.txt", true)
+		traces = append(traces, m)
+	}
+	batch, _ := NewIncoming(root)
+	if e := Prepare(context.Background(), batch, traces); e != nil {
+		t.Fatal(e)
+	}
+	first := filepath.Join(batch, traces[0].Dir(), "raw/tool.txt")
+	second := filepath.Join(batch, traces[1].Dir(), "raw/tool.txt")
+	a, _ := os.Stat(first)
+	b, _ := os.Stat(second)
+	s, _ := os.Stat(source)
+	if !os.SameFile(a, b) {
+		t.Fatal("shared companion copied twice in staging")
+	}
+	if os.SameFile(a, s) {
+		t.Fatal("linked live source")
+	}
+	if e := Incorporate(root, batch); e != nil {
+		t.Fatal(e)
+	}
+	first = filepath.Join(root, traces[0].Dir(), "raw/tool.txt")
+	second = filepath.Join(root, traces[1].Dir(), "raw/tool.txt")
+	a, _ = os.Stat(first)
+	b, _ = os.Stat(second)
+	if !os.SameFile(a, b) {
+		t.Fatal("shared companion copied twice in archive")
+	}
+	put(t, source, "new result")
+	m := traces[0]
+	m.Members = nil
+	addMember(&m, source, "tool.txt", true)
+	batch, _ = NewIncoming(root)
+	if e := Prepare(context.Background(), batch, []Manifest{m}); e != nil {
+		t.Fatal(e)
+	}
+	if e := Incorporate(root, batch); e != nil {
+		t.Fatal(e)
+	}
+	got, _ := os.ReadFile(second)
+	if string(got) != "shared bytes" {
+		t.Fatal("update changed another trace's retained bytes")
+	}
+	if e := Verify(root); e != nil {
+		t.Fatal(e)
+	}
+}

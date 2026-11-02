@@ -93,7 +93,7 @@ func handle(ctx context.Context, req request) (response, error) {
 		if !filepath.IsAbs(req.Root) {
 			return res, fmt.Errorf("archive root must be absolute")
 		}
-		if e := Recover(req.Root); e != nil {
+		if e := recoverHost(req.Root, req.Host.User, req.Host.Host); e != nil {
 			return res, e
 		}
 		old, e := LoadManifests(req.Root)
@@ -108,7 +108,7 @@ func handle(ctx context.Context, req request) (response, error) {
 			}
 		}
 	case "recover":
-		return res, Recover(req.Root)
+		return res, recoverHost(req.Root, req.Host.User, req.Host.Host)
 	case "prepare":
 		batch, e := os.MkdirTemp("", "agent-session-archiver-")
 		if e != nil {
@@ -131,7 +131,7 @@ func handle(ctx context.Context, req request) (response, error) {
 	return res, nil
 }
 func transfer(ctx context.Context, source, dest string) error {
-	cmd := exec.CommandContext(ctx, "rsync", "-rt", "--protect-args", "--chmod=Du=rwx,Dgo=,Fu=rw,Fgo=", "-e", "ssh -oBatchMode=yes -oConnectTimeout=10", "--", source, dest)
+	cmd := exec.CommandContext(ctx, "rsync", "-rtH", "--protect-args", "--chmod=Du=rwx,Dgo=,Fu=rw,Fgo=", "-e", "ssh -oBatchMode=yes -oConnectTimeout=10", "--", source, dest)
 	b, e := cmd.CombinedOutput()
 	if e != nil {
 		return fmt.Errorf("rsync: %w: %s", e, b)
@@ -148,7 +148,7 @@ func inventoryErrors(inv Inventory) error {
 func Pull(ctx context.Context, h Host, root string, full bool) (Result, error) {
 	var result Result
 	// Recovery precedes contact with the source, which may no longer exist.
-	if e := Recover(root); e != nil {
+	if e := recoverHost(root, h.User, h.Host); e != nil {
 		return result, e
 	}
 	discovered, e := remote(ctx, h.SSH, request{Op: "discover", Host: h})
@@ -163,7 +163,7 @@ func Pull(ctx context.Context, h Host, root string, full bool) (Result, error) {
 	}()
 	result.Discovered = len(inv.Traces)
 	result.Errors = inv.Errors
-	selection, e := handle(ctx, request{Op: "select", Root: root, Traces: inv.Traces, Full: full})
+	selection, e := handle(ctx, request{Op: "select", Host: h, Root: root, Traces: inv.Traces, Full: full})
 	if e != nil {
 		return result, e
 	}
@@ -195,7 +195,7 @@ func Push(ctx context.Context, h Host, dest string, full bool) (Result, error) {
 	if e != nil {
 		return result, e
 	}
-	if _, e = remote(ctx, server, request{Op: "recover", Root: root}); e != nil {
+	if _, e = remote(ctx, server, request{Op: "recover", Host: h, Root: root}); e != nil {
 		return result, e
 	}
 	home, e := os.UserHomeDir()
@@ -210,7 +210,7 @@ func Push(ctx context.Context, h Host, dest string, full bool) (Result, error) {
 	}()
 	result.Discovered = len(inv.Traces)
 	result.Errors = inv.Errors
-	selection, e := remote(ctx, server, request{Op: "select", Root: root, Traces: inv.Traces, Full: full})
+	selection, e := remote(ctx, server, request{Op: "select", Host: h, Root: root, Traces: inv.Traces, Full: full})
 	if e != nil {
 		return result, e
 	}

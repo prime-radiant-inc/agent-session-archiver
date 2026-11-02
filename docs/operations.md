@@ -41,8 +41,8 @@ checksums. Append-only growth after the bounded read is picked up next time. Mut
 companions require stable metadata across the read. --full bypasses metadata hints.
 
 Project discovery prefers the live Git origin/common directory. When the working
-repository is unavailable, it uses Codex session metadata or Evener companion
-metadata containing a recorded Git origin, then falls back to the working path.
+repository is unavailable, it uses Codex session metadata, Evener companion metadata or a single Grok
+summary remote containing a recorded Git origin, then falls back to the working path.
 Existing archive placement remains stable.
 
 Codex's shared session index is captured once per root as a metadata trace under

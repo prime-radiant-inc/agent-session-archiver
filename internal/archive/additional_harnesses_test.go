@@ -86,6 +86,10 @@ func TestGrokCapturesWholeSessionAndRetainsTranscript(t *testing.T) {
 	if e := capture(); e != nil {
 		t.Fatal(e)
 	}
+	retained, err := os.ReadFile(filepath.Join(root, m.Dir(), "raw", "sessions/%2Fgone/session-id/summary.json"))
+	if err != nil || string(retained) != `{"info":{"cwd":"/gone"},"title":"new"}` {
+		t.Fatalf("companion did not refresh: %s %v", retained, err)
+	}
 	put(t, filepath.Join(session, "chat_history.jsonl"), "first\n")
 	if e := capture(); e == nil {
 		t.Fatal("transcript shrink accepted")
@@ -95,5 +99,9 @@ func TestGrokCapturesWholeSessionAndRetainsTranscript(t *testing.T) {
 	}
 	if e := Verify(root); e != nil {
 		t.Fatal(e)
+	}
+	retainedManifests, err := LoadManifests(root)
+	if err != nil || len(retainedManifests) != 1 {
+		t.Fatalf("lost retained session: %d %v", len(retainedManifests), err)
 	}
 }

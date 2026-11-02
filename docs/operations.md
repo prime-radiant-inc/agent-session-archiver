@@ -179,3 +179,10 @@ A historical directory named `conversation-archive` may contain Codex rollouts a
 well as Claude files. Claude archive discovery skips records with Codex session
 headers. Configure the Codex subtree (often a year directory) under Codex `archives`
 as well to capture those records with the right harness and native session ID.
+
+If a source machine holds historical copies from other hosts, preserve the original
+logical `host` labels and configure the cache paths as roots. The SSH endpoint and
+logical host label need not match. When those same labels already exist in a live
+host configuration, use a separate configuration for the caches and run both
+configurations sequentially. Different source roots keep distinct trace identities;
+this does not deduplicate a live trace against its copied historical versions.

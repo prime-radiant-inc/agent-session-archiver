@@ -144,3 +144,13 @@ flushes. The receiver still validates transferred hashes and durably publishes t
 archive. A source-side power loss before transfer requires collecting again from the
 originals. After an interrupted SSH connection, a remote preparation process may
 finish independently; check it has stopped before removing its outgoing batch.
+
+An hourly systemd user timer can use `OnCalendar=hourly` with `Persistent=true`
+and a `Type=oneshot` service running the absolute `pull --all` command. Set
+`TimeoutStartSec=infinity` for large initial transfers. A timer does not start a
+second instance while that service is active. Enable user lingering if sync must
+continue after logout. Keep native paths, host enrollment and SSH credentials in
+private local configuration, outside this repository. Test a fresh noninteractive
+SSH connection: an existing multiplexed connection can mask an unusable unattended
+key. Run a full archive verification after the initial successful sync; repeating a
+full content read every hour can consume the entire interval on a spinning disk.

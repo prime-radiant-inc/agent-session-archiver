@@ -52,8 +52,30 @@ select changed traces instead of transferring the whole corpus.
   measured journal waits; source power loss before transfer requires recapture.
   Destination validation and durability barriers remain enabled.
 
-Native harness homes are supported. Arbitrarily rearranged historical backups are
-not automatically discovered, and raw capture does not promise every viewer will
+Native harness homes and explicitly configured historical session trees are supported.
+Arbitrarily rearranged backups are not automatically discovered, and raw capture does not promise every viewer will
 parse every retained transcript. No remote hosts or periodic schedule are enrolled
 implicitly. Capture frequency determines the loss window before a file reaches the
 archive. Database snapshots accumulate indefinitely.
+
+
+## Live rollout status
+
+The initial local capture contains 47,025 records. Its first publication was stopped
+when corpus inspection showed recorded repository metadata was being ignored for
+removed worktrees. Regression tests now cover Codex and Evener recorded origins.
+Reclassifying 25,261 captured records changes only their project field, reducing
+project/path groups from 26,914 to 10,278; captured identities and member hashes are
+unchanged. Original sources and the prior partial publication remain retained.
+This is a one-off correction of an unfinished deployment, not an archive migration
+feature. Existing committed placement remains stable in normal operation.
+
+Historical tree collection passed the race, real SSH and isolated viewer tests.
+The expanded local inventory finds 75,402 records, including 28,167 Superpowers
+records and 136 historical Evener records. The two explicitly requested remote
+hosts were inventoried and enrolled over freshly authenticated unattended SSH.
+An hourly, nonoverlapping systemd service is enabled and its first run is active.
+It runs a full archive verification after the first successful sync of all enrolled
+hosts, then checks that every original capture identity remains present. These
+inventory counts are not completed-transfer counts; final rollout verification
+is outstanding. Renaming original historical directories remains explicitly paused.

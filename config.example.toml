@@ -7,6 +7,8 @@ host = "workstation"
 
 [hosts.harnesses.claude]
 directories = ["~/.claude", "~/.claude-work", "~/.claude-personal"]
+# Optional historical session trees; originals remain in place.
+# archives = ["~/.config/superpowers/conversation-archive"]
 
 [hosts.harnesses.codex]
 

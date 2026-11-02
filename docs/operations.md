@@ -186,3 +186,10 @@ logical host label need not match. When those same labels already exist in a liv
 host configuration, use a separate configuration for the caches and run both
 configurations sequentially. Different source roots keep distinct trace identities;
 this does not deduplicate a live trace against its copied historical versions.
+
+Large companion inventories can exceed hundreds of megabytes even when their raw
+files share hard links. The authenticated SSH helper accepts the full structured
+inventory without a fixed byte cap; both endpoints need memory proportional to that
+metadata. `ASA_SCALE_TEST=1 go test ./internal/archive -run TestLargeCompanionInventoryProtocol`
+exercises selection of 10,000 traces with 64 long-path companion entries each. This
+checks the metadata exchange, not transfer throughput or a bounded-memory guarantee.

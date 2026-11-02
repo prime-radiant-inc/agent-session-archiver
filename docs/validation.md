@@ -109,3 +109,11 @@ an immutable read-only URI; the live source still uses SQLite online backup. The
 race/SSH/viewer suite and vet pass, and all three affected real cached databases now
 enumerate their sessions successfully on M5Max. Only the already-completed private
 backup is opened immutable; a changing live database must never use that mode.
+
+A real historical inventory was 835,324,248 bytes, exceeding the helper's former
+512 MiB input limit. Its complete selection request failed with `unexpected EOF`
+before the fix and returned all 83,451 records after removing the arbitrary cap.
+The authenticated SSH channel and structured input/path validation remain unchanged.
+A synthetic companion-heavy protocol regression also passes (10,000 traces with
+64 members each, 11.2 seconds); the full race/SSH/viewer suite and vet pass. This
+removes a protocol limit, not the memory cost of representing a large inventory.

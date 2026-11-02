@@ -69,7 +69,7 @@ func remote(ctx context.Context, host string, req request) (response, error) {
 }
 func Helper(ctx context.Context, in io.Reader, out io.Writer) error {
 	var req request
-	dec := json.NewDecoder(io.LimitReader(in, 512<<20))
+	dec := json.NewDecoder(in)
 	dec.DisallowUnknownFields()
 	if e := dec.Decode(&req); e != nil {
 		return e

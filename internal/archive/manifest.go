@@ -19,17 +19,19 @@ type Member struct {
 	Mutable bool   `json:"mutable,omitempty"`
 }
 type Manifest struct {
-	Version  int      `json:"version"`
-	ID       string   `json:"id"`
-	User     string   `json:"user"`
-	Host     string   `json:"host"`
-	Harness  string   `json:"harness"`
-	Root     string   `json:"root"`
-	NativeID string   `json:"native_id"`
-	CWD      string   `json:"cwd,omitempty"`
-	Project  string   `json:"project"`
-	Members  []Member `json:"members"`
-	Snapshot string   `json:"snapshot,omitempty"`
+	SourceCapture bool     `json:"source_capture,omitempty"`
+	CaptureRoot   string   `json:"capture_root,omitempty"`
+	Version       int      `json:"version"`
+	ID            string   `json:"id"`
+	User          string   `json:"user"`
+	Host          string   `json:"host"`
+	Harness       string   `json:"harness"`
+	Root          string   `json:"root"`
+	NativeID      string   `json:"native_id"`
+	CWD           string   `json:"cwd,omitempty"`
+	Project       string   `json:"project"`
+	Members       []Member `json:"members"`
+	Snapshot      string   `json:"snapshot,omitempty"`
 }
 
 func digest(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -91,7 +93,12 @@ func Project(cwd string) string {
 	}
 	return Component(cwd)
 }
-func (m Manifest) Dir() string { return filepath.Join(m.User, m.Host, m.Project, m.Harness, m.ID) }
+func (m Manifest) Dir() string {
+	if m.SourceCapture {
+		return m.sourceDir()
+	}
+	return filepath.Join(m.User, m.Host, m.Project, m.Harness, m.ID)
+}
 func Select(in []Manifest, old map[string]Manifest, full bool) []Manifest {
 	var selected []Manifest
 	for _, m := range in {
@@ -99,7 +106,7 @@ func Select(in []Manifest, old map[string]Manifest, full bool) []Manifest {
 		if exists {
 			m.Project = prev.Project
 		}
-		changed := full || !exists || m.Snapshot != ""
+		changed := full || !exists || m.Snapshot != prev.Snapshot
 		members := map[string]Member{}
 		for _, v := range prev.Members {
 			members[v.Path] = v

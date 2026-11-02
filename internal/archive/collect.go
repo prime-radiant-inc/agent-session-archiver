@@ -16,8 +16,9 @@ import (
 )
 
 type Inventory struct {
-	Traces []Manifest `json:"traces"`
-	Errors []string   `json:"errors,omitempty"`
+	Scratch []string   `json:"scratch,omitempty"`
+	Traces  []Manifest `json:"traces"`
+	Errors  []string   `json:"errors,omitempty"`
 }
 
 func Discover(ctx context.Context, h Host, home string) Inventory {
@@ -76,7 +77,14 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 					}
 				}
 			case "opencode":
-				inv.Errors = append(inv.Errors, "opencode capture not implemented")
+				traces, scratch, e := discoverOpenCode(ctx, h, root)
+				inv.Traces = append(inv.Traces, traces...)
+				if scratch != "" {
+					inv.Scratch = append(inv.Scratch, scratch)
+				}
+				if e != nil {
+					inv.Errors = append(inv.Errors, e.Error())
+				}
 				continue
 			}
 			for _, walk := range walks {

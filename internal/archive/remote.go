@@ -156,6 +156,11 @@ func Pull(ctx context.Context, h Host, root string, full bool) (Result, error) {
 		return result, e
 	}
 	inv := discovered.Inventory
+	defer func() {
+		for _, p := range inv.Scratch {
+			remote(context.Background(), h.SSH, request{Op: "cleanup", Batch: p})
+		}
+	}()
 	result.Discovered = len(inv.Traces)
 	result.Errors = inv.Errors
 	selection, e := handle(ctx, request{Op: "select", Root: root, Traces: inv.Traces, Full: full})
@@ -198,6 +203,11 @@ func Push(ctx context.Context, h Host, dest string, full bool) (Result, error) {
 		return result, e
 	}
 	inv := Discover(ctx, h, home)
+	defer func() {
+		for _, p := range inv.Scratch {
+			handle(context.Background(), request{Op: "cleanup", Batch: p})
+		}
+	}()
 	result.Discovered = len(inv.Traces)
 	result.Errors = inv.Errors
 	selection, e := remote(ctx, server, request{Op: "select", Root: root, Traces: inv.Traces, Full: full})

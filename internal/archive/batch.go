@@ -25,10 +25,15 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 			if v.SHA256 != "" {
 				continue
 			}
-			if err := safeSource(m.Root, v.Source); err != nil {
+			sourceRoot, source := m.Root, v.Source
+			if m.SourceCapture {
+				sourceRoot = m.CaptureRoot
+				source = filepath.Join(sourceRoot, "snapshot.db")
+			}
+			if err := safeSource(sourceRoot, source); err != nil {
 				return err
 			}
-			f, e := os.Open(v.Source)
+			f, e := os.Open(source)
 			if e != nil {
 				return e
 			}
@@ -44,6 +49,9 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 			}
 			v.Size = info.Size()
 			v.Mtime = info.ModTime().UnixNano()
+			if m.SourceCapture {
+				v.Mtime = 0
+			}
 			v.SHA256 = sum
 		}
 	}

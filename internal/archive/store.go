@@ -44,6 +44,17 @@ func validateManifest(m Manifest) error {
 	if _, ok := defaults[m.Harness]; !ok {
 		return fmt.Errorf("invalid harness %s", m.Harness)
 	}
+	if m.Snapshot != "" {
+		if len(m.Snapshot) != 64 {
+			return fmt.Errorf("invalid snapshot")
+		}
+		if _, e := hex.DecodeString(m.Snapshot); e != nil {
+			return e
+		}
+	}
+	if m.SourceCapture && (m.Harness != "opencode" || m.Snapshot == "") {
+		return fmt.Errorf("invalid source capture")
+	}
 	seen := map[string]bool{}
 	for _, v := range m.Members {
 		if !filepath.IsLocal(v.Path) || filepath.Clean(v.Path) != v.Path || seen[v.Path] || v.Size < 0 || len(v.SHA256) != 64 {
@@ -253,7 +264,7 @@ func incorporate(root, batch string, install func(string, string) error) error {
 				return e
 			}
 		}
-		path, e := checkedPath(root, filepath.Join(m.Dir(), "trace.json"))
+		path, e := checkedPath(root, filepath.Join(m.Dir(), m.metadataName()))
 		if e != nil {
 			return e
 		}
@@ -270,6 +281,7 @@ func incorporate(root, batch string, install func(string, string) error) error {
 		} else if !os.IsNotExist(e) {
 			return e
 		}
+		m.CaptureRoot = ""
 		if e = writeJSON(path, m); e != nil {
 			return e
 		}
@@ -395,14 +407,14 @@ func LoadManifests(root string) (map[string]Manifest, error) {
 			}
 			return nil
 		}
-		if d.Name() != "trace.json" {
+		if d.Name() != "trace.json" && d.Name() != "source.json" {
 			return nil
 		}
 		m, e := readManifest(p)
 		if e != nil {
 			return e
 		}
-		if filepath.Clean(p) != filepath.Join(root, m.Dir(), "trace.json") {
+		if filepath.Clean(p) != filepath.Join(root, m.Dir(), m.metadataName()) {
 			return fmt.Errorf("manifest location mismatch: %s", p)
 		}
 		if _, ok := out[m.ID]; ok {
@@ -423,6 +435,12 @@ func Verify(root string) error {
 	}
 	var errs []error
 	for _, m := range all {
+		if m.Snapshot != "" && !m.SourceCapture {
+			captureID := TraceID(m.User, m.Host, "opencode", m.Root, "@snapshot:"+m.Snapshot)
+			if capture, ok := all[captureID]; !ok || !capture.SourceCapture {
+				errs = append(errs, fmt.Errorf("missing snapshot for %s", m.ID))
+			}
+		}
 		for _, v := range m.Members {
 			p, e := checkedPath(root, filepath.Join(m.Dir(), "raw", v.Path))
 			if e == nil {

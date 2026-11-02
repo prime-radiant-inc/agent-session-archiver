@@ -71,3 +71,13 @@ Run `go test -race ./...` and `go vet ./...`. The real SSH integration gate is
 `ASA_SSH_TEST=1 go test ./...`; it requires ssh, sshd, ssh-keygen and rsync. It uses
 a disposable loopback server, temporary keys and strict host verification. Without
 the variable the SSH test explicitly skips. No real transcripts are test fixtures.
+
+## OpenCode
+
+The adapter uses the sqlite3 CLI's online backup command and queries the resulting
+snapshot, not a changing live session table. It currently recognizes the native
+`session(id, directory, ...)` table. If that schema is unsupported, the raw snapshot
+still transfers and the run reports incomplete session discovery. No SQLite library
+is linked into the archiver. A distinct snapshot stores the full database, so frequent
+collection of a busy database can consume substantial space. Choose its schedule
+accordingly; identical snapshot bytes are deduplicated and no snapshots are pruned.

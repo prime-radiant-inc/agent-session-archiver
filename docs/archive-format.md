@@ -10,3 +10,9 @@ Manifests retain source paths, working directory, source sizes/mtimes and captur
 SHA-256 hashes. Source mtime is a change hint, not an integrity proof. The archive
 never infers deletions from missing sources. Source root relocation creates a new
 identity; Codex movement between sessions and archived_sessions does not.
+
+OpenCode database captures use _sources/opencode/<source-id>/<snapshot-hash>/source.json
+and raw/opencode.db within each user/host directory. Session trace manifests reference
+the snapshot hash and native session ID. Each distinct database snapshot is retained
+once; older snapshots are never automatically removed. Source manifests are verified
+alongside session manifests, and missing references fail verification.

@@ -1,0 +1,26 @@
+archive = "/srv/agent-traces"
+
+[[hosts]]
+ssh = "workstation"
+user = "jesse"
+host = "workstation"
+
+[hosts.harnesses.claude]
+directories = ["~/.claude", "~/.claude-work", "~/.claude-personal"]
+# Optional historical session trees; originals remain in place.
+# archives = ["~/.config/superpowers/conversation-archive"]
+
+[hosts.harnesses.codex]
+
+[hosts.harnesses.pi]
+
+[hosts.harnesses.evener]
+
+[hosts.harnesses.opencode]
+
+[[hosts]]
+ssh = "laptop"
+user = "jesse"
+host = "laptop"
+
+[hosts.harnesses.claude]

@@ -55,7 +55,7 @@ func discoverOpenCode(ctx context.Context, h Host, root string) ([]Manifest, str
 	for _, s := range sessions {
 		project, ok := projects[s.Directory]
 		if !ok {
-			project = Project(s.Directory)
+			project = Project(s.Directory, "")
 			projects[s.Directory] = project
 		}
 		m := Manifest{Version: 1, User: h.User, Host: h.Host, Harness: "opencode", Root: root, NativeID: s.ID, CWD: s.Directory, Project: project, Snapshot: sum}

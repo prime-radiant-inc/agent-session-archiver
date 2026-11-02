@@ -22,6 +22,11 @@ must accommodate changed payloads. Copies use one descriptor, a bounded length, 
 checksums. Append-only growth after the bounded read is picked up next time. Mutable
 companions require stable metadata across the read. --full bypasses metadata hints.
 
+Project discovery prefers the live Git origin/common directory. When the working
+repository is unavailable, it uses Codex session metadata or Evener companion
+metadata containing a recorded Git origin, then falls back to the working path.
+Existing archive placement remains stable.
+
 Codex's shared session index is captured once per root as a metadata trace under
 `shared codex metadata`, rather than duplicated for every session.
 
@@ -98,7 +103,7 @@ accordingly; identical snapshot bytes are deduplicated and no snapshots are prun
 
 `ASA_SCALE_TEST=1 go test -v ./internal/archive -run TestHundredThousandTraces`
 creates 100,000 synthetic sources and real manifest directories. On the final Linux
-SSD run, discovery took 4.7 s, manifest scanning 2.4 s, and unchanged selection 55 ms.
+SSD run, discovery took 5.8 s, manifest scanning 3.2 s, and unchanged selection 59 ms.
 These measure metadata/discovery, not spinning-disk ingestion throughput or fsync cost.
 No sharding or inventory database is required by that measurement.
 

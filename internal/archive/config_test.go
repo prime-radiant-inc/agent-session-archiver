@@ -79,9 +79,12 @@ func TestRepositoryAndIdentity(t *testing.T) {
 	git(t, d, "init")
 	git(t, d, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial")
 	git(t, d, "remote", "add", "origin", "git@github.com:owner/repo.git")
+	if Project(d, "git@github.com:owner/old-name.git") != Component("github.com/owner/repo") {
+		t.Fatal("recorded metadata overrode the live repository")
+	}
 	w := filepath.Join(t.TempDir(), "worktree")
 	git(t, d, "worktree", "add", w, "-b", "other")
-	if Project(d) != Project(w) {
+	if Project(d, "") != Project(w, "") {
 		t.Fatal("worktrees split")
 	}
 	if NormalizeRemote("https://user:secret@github.com/owner/repo.git") != "github.com/owner/repo" {
@@ -93,11 +96,11 @@ func TestRepositoryAndIdentity(t *testing.T) {
 	if TraceID("u", "h", "codex", "/root1", "id") == TraceID("u", "h", "codex", "/root2", "id") {
 		t.Fatal("root collision")
 	}
-	m := Manifest{User: "u", Host: "h", Harness: "codex", Root: "/root1", NativeID: "id", Project: Project(d)}
+	m := Manifest{User: "u", Host: "h", Harness: "codex", Root: "/root1", NativeID: "id", Project: Project(d, "")}
 	m.ID = TraceID(m.User, m.Host, m.Harness, m.Root, m.NativeID)
 	old := m
 	git(t, d, "remote", "set-url", "origin", "git@github.com:owner/renamed.git")
-	m.Project = Project(d)
+	m.Project = Project(d, "")
 	selection := Select([]Manifest{m}, map[string]Manifest{old.ID: old}, false)
 	if len(selection) != 0 {
 		t.Fatal("unchanged trace selected")

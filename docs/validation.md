@@ -9,8 +9,8 @@ transcripts and rollout logs remain private.
 - Go race tests and vet pass, including real loopback SSH push/pull, interrupted
   transfer, offline-host continuation and switching transfer direction.
 - Linux and macOS CI pass. The Linux job includes real SSH integration.
-- A 100,000-trace SSD fixture measured discovery at 4.7 seconds, manifest scanning
-  at 2.4 seconds and unchanged selection at 55 milliseconds. One changed trace was
+- A 100,000-trace SSD fixture measured discovery at 5.8 seconds, manifest scanning
+  at 3.2 seconds and unchanged selection at 59 milliseconds. One changed trace was
   selected. This does not measure HDD ingestion or durability-flush performance.
 - An isolated AgentsView import reads one retained synthetic Claude session, with
   Hermes excluded, and leaves the archive verifiable.
@@ -18,6 +18,16 @@ transcripts and rollout logs remain private.
   each before fixes: recovery of complete unacknowledged transfers, recovery isolation
   between hosts, and retaining first placement across concurrent initial captures.
   No minor review findings were deferred.
+
+## HDD observation
+
+The first staged-content check on the local spinning disk took 46.8 minutes for
+47,025 records containing about 155 GB of logical file content, including shared
+companions. This excludes transfer, publication and final archive verification;
+it is an observation from the live rollout, not a controlled benchmark. Small-file
+and directory I/O make this workload substantially slower than the SSD metadata
+fixture. Plan the initial ingestion accordingly; ordinary incremental captures
+select changed traces instead of transferring the whole corpus.
 
 ## Implementation decisions and limits
 

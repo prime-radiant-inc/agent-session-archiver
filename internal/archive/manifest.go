@@ -74,10 +74,7 @@ func NormalizeRemote(s string) string {
 	}
 	return strings.TrimSuffix(strings.ToLower(u.Hostname())+"/"+strings.Trim(u.Path, "/"), ".git")
 }
-func Project(cwd string) string {
-	if cwd == "" {
-		return Component("unknown")
-	}
+func Project(cwd, recordedRemote string) string {
 	run := func(args ...string) string {
 		b, e := exec.Command("git", append([]string{"-C", cwd}, args...)...).Output()
 		if e != nil {
@@ -85,11 +82,19 @@ func Project(cwd string) string {
 		}
 		return strings.TrimSpace(string(b))
 	}
-	if remote := run("remote", "get-url", "origin"); remote != "" {
-		return Component(NormalizeRemote(remote))
+	if cwd != "" {
+		if remote := run("remote", "get-url", "origin"); remote != "" {
+			return Component(NormalizeRemote(remote))
+		}
+		if common := run("rev-parse", "--path-format=absolute", "--git-common-dir"); common != "" {
+			return Component(common)
+		}
 	}
-	if common := run("rev-parse", "--path-format=absolute", "--git-common-dir"); common != "" {
-		return Component(common)
+	if recordedRemote != "" {
+		return Component(NormalizeRemote(recordedRemote))
+	}
+	if cwd == "" {
+		return Component("unknown")
 	}
 	return Component(cwd)
 }

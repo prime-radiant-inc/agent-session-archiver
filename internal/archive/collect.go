@@ -28,7 +28,7 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 		inv.Errors = append(inv.Errors, err.Error())
 		return inv
 	}
-	projects := map[string]string{}
+	projects := map[[2]string]string{}
 	for name, dirs := range roots {
 		for _, root := range dirs {
 			if err := ctx.Err(); err != nil {
@@ -129,7 +129,18 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 					if e := safeSource(root, p); e != nil {
 						return e
 					}
-					id, cwd := metadata(p, name)
+					id, cwd, recordedRemote := metadata(p, name)
+					companion := ""
+					if name == "evener" {
+						meta := strings.TrimSuffix(p, ".transcript.jsonl") + ".meta.json"
+						if _, e := os.Stat(meta); e == nil {
+							if e = safeSource(root, meta); e != nil {
+								return e
+							}
+							companion = meta
+							recordedRemote = evenerRepository(meta)
+						}
+					}
 					if name == "claude" {
 						id = strings.TrimSuffix(filepath.Base(p), ".jsonl")
 						if strings.Contains(rel, "/subagents/") {
@@ -139,23 +150,21 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 					if id == "" {
 						id = filepath.ToSlash(rel)
 					}
-					project, ok := projects[cwd]
+					projectKey := [2]string{cwd, recordedRemote}
+					project, ok := projects[projectKey]
 					if !ok {
-						project = Project(cwd)
-						projects[cwd] = project
+						project = Project(cwd, recordedRemote)
+						projects[projectKey] = project
 					}
 					m := Manifest{Version: 1, User: h.User, Host: h.Host, Harness: name, Root: root, NativeID: id, CWD: cwd, Project: project}
 					m.ID = TraceID(m.User, m.Host, m.Harness, m.Root, m.NativeID)
 					if e = addMember(&m, p, rel, false); e != nil {
 						return e
 					}
-					if name == "evener" {
-						meta := strings.TrimSuffix(p, ".transcript.jsonl") + ".meta.json"
-						if _, e := os.Stat(meta); e == nil {
-							r, _ := filepath.Rel(root, meta)
-							if e = addMember(&m, meta, r, true); e != nil {
-								return e
-							}
+					if companion != "" {
+						r, _ := filepath.Rel(root, companion)
+						if e = addMember(&m, companion, r, true); e != nil {
+							return e
 						}
 					}
 					if name == "claude" {
@@ -247,24 +256,24 @@ func safeSource(root, p string) error {
 	}
 	return nil
 }
-func metadata(p, name string) (string, string) {
+func metadata(p, name string) (string, string, string) {
 	f, e := os.Open(p)
 	if e != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer f.Close()
 	var r io.Reader = f
 	if strings.HasSuffix(p, ".zst") {
 		z, e := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
 		if e != nil {
-			return "", ""
+			return "", "", ""
 		}
 		defer z.Close()
 		r = z
 	}
 	scanner := bufio.NewScanner(io.LimitReader(r, 1024*1024))
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
-	id, cwd := "", ""
+	id, cwd, recordedRemote := "", "", ""
 	for n := 0; n < 32 && scanner.Scan(); n++ {
 		var v map[string]json.RawMessage
 		if json.Unmarshal(scanner.Bytes(), &v) != nil {
@@ -274,6 +283,12 @@ func metadata(p, name string) (string, string) {
 			var nested map[string]json.RawMessage
 			if json.Unmarshal(v["payload"], &nested) == nil {
 				v = nested
+			}
+			var git struct {
+				RepositoryURL string `json:"repository_url"`
+			}
+			if json.Unmarshal(v["git"], &git) == nil && git.RepositoryURL != "" {
+				recordedRemote = git.RepositoryURL
 			}
 		}
 		keys := []string{"session_id", "sessionId", "id"}
@@ -296,5 +311,22 @@ func metadata(p, name string) (string, string) {
 			break
 		}
 	}
-	return id, cwd
+	return id, cwd, recordedRemote
+}
+
+func evenerRepository(p string) string {
+	f, e := os.Open(p)
+	if e != nil {
+		return ""
+	}
+	defer f.Close()
+	var meta struct {
+		Environment struct {
+			Origin string `json:"git_origin_url"`
+		} `json:"env_info"`
+	}
+	if json.NewDecoder(io.LimitReader(f, 1024*1024)).Decode(&meta) != nil {
+		return ""
+	}
+	return meta.Environment.Origin
 }

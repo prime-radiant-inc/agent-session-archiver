@@ -2,11 +2,64 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/klauspost/compress/zstd"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestRecordedRepositoriesSurviveMissingWorktrees(t *testing.T) {
+	d := t.TempDir()
+	root := filepath.Join(d, "codex")
+	missing := filepath.Join(d, "removed-worktree")
+	for _, item := range []struct{ id, cwd, remote string }{
+		{"first", missing, "git@github.com:owner/first.git"},
+		{"second", missing, "https://github.com/owner/second.git"},
+		{"same-repo", filepath.Join(d, "another-removed-worktree"), "https://github.com/owner/first.git"},
+		{"no-evidence", missing, ""},
+	} {
+		b, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]any{
+			"id": item.id, "cwd": item.cwd, "git": map[string]string{"repository_url": item.remote},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		put(t, filepath.Join(root, "sessions", item.id+".jsonl"), string(b)+"\n")
+	}
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"codex": {Directories: []string{root}}}}, d)
+	if len(inv.Errors) != 0 || len(inv.Traces) != 4 {
+		t.Fatalf("%+v", inv)
+	}
+	want := map[string]string{
+		"first": Component("github.com/owner/first"), "same-repo": Component("github.com/owner/first"),
+		"second": Component("github.com/owner/second"), "no-evidence": Component(missing),
+	}
+	for _, m := range inv.Traces {
+		if m.Project != want[m.NativeID] {
+			t.Errorf("%s: project %q, want %q", m.NativeID, m.Project, want[m.NativeID])
+		}
+	}
+}
+
+func TestEvenerUsesRecordedRepository(t *testing.T) {
+	d := t.TempDir()
+	root := filepath.Join(d, "evener")
+	p := filepath.Join(root, "projects", "project", "sessions", "session")
+	b, err := json.Marshal(map[string]string{"session_id": "session", "working_dir": filepath.Join(d, "removed-worktree")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, p+".transcript.jsonl", string(b)+"\n")
+	put(t, p+".meta.json", `{"env_info":{"git_origin_url":"git@github.com:owner/repo.git"}}`)
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"evener": {Directories: []string{root}}}}, d)
+	if len(inv.Errors) != 0 || len(inv.Traces) != 1 {
+		t.Fatalf("%+v", inv)
+	}
+	if inv.Traces[0].Project != Component("github.com/owner/repo") || len(inv.Traces[0].Members) != 2 {
+		t.Fatalf("recorded repository or raw companion lost: %+v", inv.Traces[0])
+	}
+}
 
 func put(t *testing.T, p, s string) {
 	t.Helper()

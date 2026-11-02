@@ -324,3 +324,50 @@ func TestMultipleNativeFilesShareOneTrace(t *testing.T) {
 		t.Fatal("native files were lost or duplicated as traces", len(inv.Traces))
 	}
 }
+
+func TestHistoricalArchiveRoots(t *testing.T) {
+	d := t.TempDir()
+	put(t, filepath.Join(d, "claude/projects/live/live.jsonl"), "{}\n")
+	put(t, filepath.Join(d, "history/project/old.jsonl"), "{\"sessionId\":\"old\",\"cwd\":\"/gone\"}\n")
+	put(t, filepath.Join(d, "history/project/old-summary.txt"), "historical summary")
+	put(t, filepath.Join(d, "pilot/e.transcript.jsonl"), "{\"session_id\":\"e\"}\n")
+	put(t, filepath.Join(d, "pilot/e.meta.json"), "{}")
+	put(t, filepath.Join(d, "old-codex/rollout.jsonl"), `{"payload":{"id":"codex-old","cwd":"/gone"}}`+"\n")
+	put(t, filepath.Join(d, "old-codex/session_index.jsonl"), "{}\n")
+	put(t, filepath.Join(d, "old-pi/session.jsonl"), `{"id":"pi-old","cwd":"/gone"}`+"\n")
+	c, err := ParseConfig([]byte(`[[hosts]]
+user="u"
+host="h"
+[hosts.harnesses.claude]
+directories=["~/claude"]
+archives=["~/history"]
+[hosts.harnesses.evener]
+archives=["~/pilot"]
+[hosts.harnesses.codex]
+archives=["~/old-codex"]
+[hosts.harnesses.pi]
+archives=["~/old-pi"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := Discover(context.Background(), c.Hosts[0], d)
+	if len(inv.Errors) != 0 || len(inv.Traces) != 6 {
+		t.Fatalf("%+v", inv)
+	}
+	for _, m := range inv.Traces {
+		if m.NativeID == "old" || m.NativeID == "e" {
+			if len(m.Members) != 2 {
+				t.Fatalf("lost companion: %+v", m)
+			}
+		}
+	}
+	batch := t.TempDir()
+	if err := Prepare(context.Background(), batch, inv.Traces); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(d, "history/project/old-summary.txt"))
+	if err != nil || string(b) != "historical summary" {
+		t.Fatalf("source modified: %s %v", b, err)
+	}
+}

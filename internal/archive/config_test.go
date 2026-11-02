@@ -33,7 +33,7 @@ host="laptop"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roots["claude"]) != 3 || roots["claude"][1] != "/home/source/.claude-work" || roots["codex"][0] != "/home/source/.codex" {
+	if len(roots["claude"]) != 3 || roots["claude"][1].Path != "/home/source/.claude-work" || roots["codex"][0].Path != "/home/source/.codex" {
 		t.Fatal(roots)
 	}
 	if _, ok := roots["hermes"]; ok {
@@ -43,6 +43,8 @@ host="laptop"
 func TestInvalidConfiguration(t *testing.T) {
 	for _, body := range []string{
 		`directories=[]`, `directories=["relative"]`, `directories=["/a", "/a/."]`,
+		`archives=[]`, `archives=["relative"]`, `archives=["/a", "/a/."]`, `directories=["/a"]
+archives=["/a/."]`,
 	} {
 		t.Run(body, func(t *testing.T) {
 			c, err := ParseConfig([]byte("[[hosts]]\nuser=\"u\"\nhost=\"h\"\n[hosts.harnesses.claude]\n" + body))

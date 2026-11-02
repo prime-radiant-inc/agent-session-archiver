@@ -22,6 +22,12 @@ type Host struct {
 }
 type Harness struct {
 	Directories []string `toml:"directories"`
+	Archives    []string `toml:"archives"`
+}
+
+type SourceRoot struct {
+	Path    string
+	Archive bool
 }
 
 var defaults = map[string]string{"claude": ".claude", "codex": ".codex", "pi": ".pi/agent", "evener": ".local/state/evener", "opencode": ".local/share/opencode"}
@@ -43,29 +49,39 @@ func ParseConfig(b []byte) (Config, error) {
 			if _, ok := defaults[name]; !ok {
 				return c, fmt.Errorf("unsupported harness %q", name)
 			}
-			if v.Directories != nil && len(v.Directories) == 0 {
+			if (v.Directories != nil && len(v.Directories) == 0) || (v.Archives != nil && len(v.Archives) == 0) {
 				return c, fmt.Errorf("empty directories for %s", name)
 			}
 		}
 	}
 	return c, nil
 }
-func (h Host) Roots(home string) (map[string][]string, error) {
-	roots := map[string][]string{}
+func (h Host) Roots(home string) (map[string][]SourceRoot, error) {
+	roots := map[string][]SourceRoot{}
 	for name, v := range h.Harnesses {
 		def, ok := defaults[name]
 		if !ok {
 			return nil, fmt.Errorf("unsupported harness %s", name)
 		}
-		dirs := v.Directories
-		if dirs == nil {
-			dirs = []string{filepath.Join(home, def)}
+		var dirs []SourceRoot
+		if name == "opencode" && v.Archives != nil {
+			return nil, fmt.Errorf("opencode uses directories containing opencode.db")
+		}
+		for _, p := range v.Directories {
+			dirs = append(dirs, SourceRoot{Path: p})
+		}
+		for _, p := range v.Archives {
+			dirs = append(dirs, SourceRoot{Path: p, Archive: true})
+		}
+		if v.Directories == nil && v.Archives == nil {
+			dirs = []SourceRoot{{Path: filepath.Join(home, def)}}
 		}
 		if len(dirs) == 0 {
 			return nil, fmt.Errorf("empty roots")
 		}
 		seen := map[string]bool{}
-		for _, d := range dirs {
+		for _, source := range dirs {
+			d := source.Path
 			if d == "~" {
 				d = home
 			} else if strings.HasPrefix(d, "~/") {
@@ -79,7 +95,8 @@ func (h Host) Roots(home string) (map[string][]string, error) {
 				return nil, fmt.Errorf("duplicate root %s", d)
 			}
 			seen[d] = true
-			roots[name] = append(roots[name], d)
+			source.Path = d
+			roots[name] = append(roots[name], source)
 		}
 	}
 	return roots, nil

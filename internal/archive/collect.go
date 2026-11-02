@@ -30,7 +30,8 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 	}
 	projects := map[[2]string]string{}
 	for name, dirs := range roots {
-		for _, root := range dirs {
+		for _, source := range dirs {
+			root := source.Path
 			if err := ctx.Err(); err != nil {
 				inv.Errors = append(inv.Errors, err.Error())
 				return inv
@@ -40,10 +41,7 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 				continue
 			}
 			var walks []string
-			switch name {
-			case "claude":
-				walks = []string{filepath.Join(root, "projects")}
-			case "codex":
+			if name == "codex" {
 				index := filepath.Join(root, "session_index.jsonl")
 				if _, e := os.Stat(index); e == nil {
 					m := Manifest{Version: 1, User: h.User, Host: h.Host, Harness: name, Root: root, NativeID: "@session_index", Project: Component("shared codex metadata")}
@@ -54,38 +52,48 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 						inv.Traces = append(inv.Traces, m)
 					}
 				}
-				for _, d := range []string{"sessions", "archived_sessions"} {
-					p := filepath.Join(root, d)
-					if _, e := os.Stat(p); e == nil {
-						walks = append(walks, p)
-					}
-				}
-			case "pi":
-				walks = []string{filepath.Join(root, "sessions")}
-			case "evener":
-				entries, e := os.ReadDir(filepath.Join(root, "projects"))
-				if e != nil {
-					inv.Errors = append(inv.Errors, e.Error())
-					continue
-				}
-				for _, v := range entries {
-					if v.IsDir() {
-						p := filepath.Join(root, "projects", v.Name(), "sessions")
+
+			}
+			if source.Archive {
+				walks = []string{root}
+			} else {
+				switch name {
+				case "claude":
+					walks = []string{filepath.Join(root, "projects")}
+				case "codex":
+					for _, d := range []string{"sessions", "archived_sessions"} {
+						p := filepath.Join(root, d)
 						if _, e := os.Stat(p); e == nil {
 							walks = append(walks, p)
 						}
 					}
+				case "pi":
+					walks = []string{filepath.Join(root, "sessions")}
+				case "evener":
+					entries, e := os.ReadDir(filepath.Join(root, "projects"))
+					if e != nil {
+						inv.Errors = append(inv.Errors, e.Error())
+						continue
+					}
+					for _, v := range entries {
+						if v.IsDir() {
+							p := filepath.Join(root, "projects", v.Name(), "sessions")
+							if _, e := os.Stat(p); e == nil {
+								walks = append(walks, p)
+							}
+						}
+					}
+				case "opencode":
+					traces, scratch, e := discoverOpenCode(ctx, h, root)
+					inv.Traces = append(inv.Traces, traces...)
+					if scratch != "" {
+						inv.Scratch = append(inv.Scratch, scratch)
+					}
+					if e != nil {
+						inv.Errors = append(inv.Errors, e.Error())
+					}
+					continue
 				}
-			case "opencode":
-				traces, scratch, e := discoverOpenCode(ctx, h, root)
-				inv.Traces = append(inv.Traces, traces...)
-				if scratch != "" {
-					inv.Scratch = append(inv.Scratch, scratch)
-				}
-				if e != nil {
-					inv.Errors = append(inv.Errors, e.Error())
-				}
-				continue
 			}
 			for _, walk := range walks {
 				visit := func(p string, d fs.DirEntry, e error) error {
@@ -129,6 +137,9 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 					if e := safeSource(root, p); e != nil {
 						return e
 					}
+					if name == "codex" && filepath.Base(p) == "session_index.jsonl" {
+						return nil
+					}
 					id, cwd, recordedRemote := metadata(p, name)
 					companion := ""
 					if name == "evener" {
@@ -168,6 +179,15 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 						}
 					}
 					if name == "claude" {
+						if source.Archive {
+							summary := strings.TrimSuffix(p, ".jsonl") + "-summary.txt"
+							if _, e := os.Stat(summary); e == nil {
+								r, _ := filepath.Rel(root, summary)
+								if e = addMember(&m, summary, r, true); e != nil {
+									return e
+								}
+							}
+						}
 						sides := []string{strings.TrimSuffix(p, ".jsonl") + "/tool-results"}
 						if idx := strings.Index(p, "/subagents/"); idx >= 0 {
 							sides = append(sides, filepath.Join(p[:idx], "tool-results"))

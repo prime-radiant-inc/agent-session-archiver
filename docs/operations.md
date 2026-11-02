@@ -12,6 +12,22 @@ Each configured harness root contains:
 | Evener | projects/*/sessions/; project worktrees are not traversed |
 | OpenCode | opencode.db (database capture requires sqlite3) |
 
+For historical trees that contain session files directly, use `archives` alongside
+(or instead of) `directories`, for example:
+
+```toml
+[hosts.harnesses.claude]
+directories = ["~/.claude"]
+archives = ["~/.config/superpowers/conversation-archive"]
+```
+
+Archive roots are supported for Claude, Codex, Pi and Evener. Claude, Codex and Pi
+walk the configured tree; Evener reads its direct session files without descending
+into artifacts. Claude summary text and known companions are retained. OpenCode
+backup directories use `directories` and must contain `opencode.db`. Originals stay
+in place; collection never moves or marks a source. Different roots retain separate
+identities, even when they hold copies of the same native session.
+
 Explicit roots replace defaults. Home expansion happens on the source. Only listed
 harnesses are enabled. Duplicate roots are rejected; root symlinks are allowed, but
 file symlinks must resolve within the configured root. Directory symlinks are

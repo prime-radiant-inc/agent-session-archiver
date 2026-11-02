@@ -89,8 +89,8 @@ accordingly; identical snapshot bytes are deduplicated and no snapshots are prun
 ## Scale and viewer checks
 
 `ASA_SCALE_TEST=1 go test -v ./internal/archive -run TestHundredThousandTraces`
-creates 100,000 synthetic sources and real manifest directories. On the initial Linux
-SSD run, discovery took 2.1 s, manifest scanning 2.6 s, and unchanged selection 59 ms.
+creates 100,000 synthetic sources and real manifest directories. On the final Linux
+SSD run, discovery took 4.7 s, manifest scanning 2.4 s, and unchanged selection 55 ms.
 These measure metadata/discovery, not spinning-disk ingestion throughput or fsync cost.
 No sharding or inventory database is required by that measurement.
 
@@ -109,3 +109,9 @@ which detach the updated path rather than changing other traces' retained bytes.
 Treat archive raw files as immutable; restore by copying before editing. Filesystems
 that cannot create a link fall back to copying. This saves shared Claude tool-result
 space without a separate object store or persistent index.
+
+Source preparation uses disposable temporary copies without per-file durability
+flushes. The receiver still validates transferred hashes and durably publishes the
+archive. A source-side power loss before transfer requires collecting again from the
+originals. After an interrupted SSH connection, a remote preparation process may
+finish independently; check it has stopped before removing its outgoing batch.

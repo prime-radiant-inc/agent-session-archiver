@@ -44,12 +44,13 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 			}
 			dest := filepath.Join(batch, m.Dir(), "raw", v.Path)
 			if prior, ok := copies[key]; ok && prior.member.Mutable == v.Mutable {
-				if e = installLink(prior.path, dest); e != nil {
+				if e = stageLink(prior.path, dest); e != nil {
 					return e
 				}
 				v.Size = prior.member.Size
 				v.Mtime = prior.member.Mtime
 				v.SHA256 = prior.member.SHA256
+				copies[key] = captured{dest, *v}
 				continue
 			}
 			f, e := os.Open(source)
@@ -106,9 +107,7 @@ func copyOpened(f *os.File, info os.FileInfo, dest string, mutable bool) (string
 	if after.Size() < info.Size() || mutable && (after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime())) {
 		return "", fmt.Errorf("source changed during capture: %s", f.Name())
 	}
-	if e = out.Sync(); e != nil {
-		return "", e
-	}
+
 	if e = out.Close(); e != nil {
 		return "", e
 	}
@@ -157,4 +156,26 @@ func writeJSON(path string, v any) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+// Source batches are disposable and validated after transfer. Durability barriers
+// belong to archive publication, not these private temporary copies.
+func stageLink(src, dest string) error {
+	if e := os.MkdirAll(filepath.Dir(dest), 0700); e != nil {
+		return e
+	}
+	if e := os.Link(src, dest); e == nil {
+		return nil
+	}
+	f, e := os.Open(src)
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	info, e := f.Stat()
+	if e != nil {
+		return e
+	}
+	_, e = copyOpened(f, info, dest, false)
+	return e
 }

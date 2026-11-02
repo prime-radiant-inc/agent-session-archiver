@@ -1,34 +1,18 @@
-# Agent session archiver
+# Agent session archiver: simple design
 
-Repository: prime-radiant-inc/agent-session-archiver.
+## What it does
 
-## Purpose and agreed scope
+Collect original agent traces from configured machines into an ordinary-file archive.
+A source-directory wipe must not delete anything already archived. AgentsView and
+other viewers consume the archive; they do not own it.
 
-Preserve original agent traces from multiple hosts as ordinary files on an archive
-server, independently of AgentsView. Deleting a source harness directory must never
-delete successfully archived data. Keep raw bytes even if a viewer cannot parse them.
+One Go executable uses system SSH and rsync. sqlite3 is an optional dependency only
+for database-backed harnesses. No archive database, custom transport protocol,
+transaction journal, service daemon, or plugin framework. Cron/systemd can schedule it.
 
-One Go CLI supports push and pull over SSH. Use system SSH and rsync for transport.
-No custom transfer protocol, archive database, database inventory, transaction journal,
-namespace authorization service, or automatic remote installation. SQLite is used
-only to capture harnesses whose native storage already uses it, through the optional
-sqlite3 command-line tool. Scheduling belongs to cron or systemd initially.
+## Configuration and commands
 
-## Approaches and simplification
-
-Separate push/pull implementations duplicate collection and retention logic. A pull
-that asks the source to open a reverse connection requires extra credentials and
-reachability. Instead, both modes share collection and incorporation code, with all
-SSH connections initiated from the machine running the command.
-
-The earlier custom wire protocol and SQLite catalog were unnecessary infrastructure.
-Use SSH commands for preparation/incorporation and rsync over SSH for bytes. Multiple
-connections in the same direction are acceptable. Filesystem metadata and small JSON
-manifests are sufficient initially; measure actual scans before introducing a cache.
-
-## Configuration
-
-The archive server keeps a TOML configuration listing hosts and their harnesses:
+Use the same host records for push and pull:
 
 ```toml
 archive = "/srv/agent-traces"
@@ -43,8 +27,6 @@ directories = ["~/.claude", "~/.claude-work", "~/.claude-personal"]
 
 [hosts.harnesses.codex]
 
-[hosts.harnesses.evener]
-
 [[hosts]]
 ssh = "laptop"
 user = "jesse"
@@ -53,130 +35,140 @@ host = "laptop"
 [hosts.harnesses.claude]
 ```
 
-`ssh` is an SSH-config destination. `user` and `host` are stable archive identities;
-SSH alias changes do not rename archived data. Select a configured host by `host`;
-require host selectors to be unique within a configuration.
+- `pull --all`: sequentially fetch every configured host into `archive`.
+- `pull laptop`: fetch the record selected by its unique `host` name.
+- `push laptop archive-server:/srv/agent-traces`: collect locally using the laptop
+  record and send to that destination. Its `ssh` field is unused in push mode.
+- `verify`: check the local configured archive without contacting source hosts.
+- `--config FILE` selects configuration; `--full` on push/pull bypasses size/mtime
+  shortcuts. There is no separate reconcile command.
 
-A harness table enables that harness. Unlisted harnesses are excluded. Omitted
-`directories` uses native defaults; an explicit nonempty list replaces the defaults.
-Reject empty lists to avoid ambiguous behavior. Each entry is a harness data root:
-Claude roots contain projects/, Codex roots contain sessions/ and archived_sessions/.
-Document the equivalent root for each other adapter. Resolve ~ on the source host
-under its SSH account; reject other relative roots rather than depending on remote cwd.
-Expand only ~ or ~/ prefixes, not shell expressions or environment substitutions.
+A harness table enables collection. Missing tables exclude the harness. Omitted
+`directories` uses native defaults; a nonempty list replaces them. Empty lists are
+errors. Directories are harness data roots: Claude roots contain projects/, Codex
+roots contain sessions/ and archived_sessions/. Document roots for every adapter.
+Expand ~ on the source under its executing account, not on the controller. Reject
+other relative roots and duplicate normalized roots. Do not expand shell expressions.
 
-Multiple roots of a harness feed the same project/harness grouping. Preserve the
-original root and path in every trace manifest. Scope trace identity by source root
-where needed to prevent native-ID collisions; never silently merge different sources.
-Duplicate configured roots after normalization are an error.
+`user` and `host` select stable archive directories; `ssh` selects the connection.
+SSH config supplies credentials, ports and jump hosts. Continue after a host fails,
+report each failure, and return nonzero if any requested collection was incomplete.
+The enrollment config lives outside this public repository.
 
-Commands: `pull --all`, `pull <host>`, and `push <ssh-destination>:<archive-path>`.
-All accept `--config <path>`. Pull configuration uses `archive` and `hosts` above.
-Push configuration uses a `[source]` table with `user`, `host`, and nested `harnesses`
-tables following exactly the same directory rules; its archive destination is the
-command argument. Host lists run sequentially. Report an offline/failed host and
-continue; return nonzero if any requested host fails. Credentials and connection
-options stay in normal SSH configuration. Enrollment config never goes in this repo.
-
-## Archive layout
+## Files on disk
 
     <archive>/<user>/<host>/<project>/<harness>/<trace-id>/
         trace.json
         raw/<native files and relative subdirectories>
 
-No sharding. Group Git worktrees and checkouts by normalized repository remote,
-including hosting service and owner, not just basename. Prefer origin or an explicit
-override; do not guess among ambiguous remotes. Without a remote, use the Git common
-directory to group local worktrees. For nonrepositories use the full working path
-with separators replaced and a collision suffix. Keep original paths in metadata.
-Resolve project metadata on the source; missing historical repositories can use
-recorded metadata or an explicit unresolved group without blocking capture.
+No sharding. Each trace has ordinary native files and a small JSON manifest with
+source root/path, native ID, original working directory, project identity, and each
+member's size and hash. Multiple installations of a harness share the project/harness
+grouping but retain separate source identities when IDs collide. Never deduplicate
+independent installations merely because native IDs match.
 
-Bound and sanitize path components, preserving collision resistance. Trace identities
-are stable and independent of content or physical archive location. trace.json holds
-source provenance, native ID, project evidence, relationships where known, member
-paths, sizes and hashes. Keep native companions together; copying a small shared
-companion is preferable to a general-purpose reference/object-storage system.
+Group worktrees/checkouts by normalized Git remote, including remote host and owner.
+Prefer origin; use Git's common directory for a local repository without a remote.
+If the repository is gone or ambiguous, use recorded evidence or the original working
+path. Nonrepository names replace path delimiters and include a collision suffix.
+Bound and sanitize all archive path components.
 
-## Collection and incorporation
+Choose the project on first capture and retain that placement. Do not automatically
+move old traces when remotes change or more metadata appears. Match existing traces
+by stable source identity from manifests; an in-memory map rebuilt during discovery
+is sufficient initially. No persistent database or automatic migration subsystem. Identity is user, host,
+harness, normalized absolute source root, and native session ID (with harness-specific
+scope if IDs are only locally unique). Without a native ID, use source-relative path.
+Moving a Codex session between sessions/ and archived_sessions/ retains its identity;
+moving an installation root creates a separate source. No migration mechanism.
 
-Adapters discover known transcript roots and companions, not entire home directories
-or paths mentioned inside messages. Do not follow symlinks outside configured roots.
-Support Claude, Codex, Pi, Evener and OpenCode initially; the first deployment excludes
-Hermes. Preserve compressed Codex sources unchanged. Metadata extraction failure does
-not prevent preserving a recognizable raw source. Do not reproduce viewer-specific
-splitting or joining of logical sessions.
+## Three operations
 
-Prepare a stable outgoing batch using temporary files, recording observed lengths
-and hashes. An active append can wait for the next run. Transfer into a separate
-incoming staging directory, never directly over the permanent archive. Use rsync
-without deletion propagation and without in-place writes to archived files.
+1. **Discover:** find native traces and known companions; determine identities and
+   paths. Parse only metadata needed for collection. Do not reconstruct fork ancestry,
+   join sessions, or follow arbitrary paths mentioned in messages. Preserve malformed
+   viewer content, compressed Codex files and companions without normalization.
+2. **Transfer:** select new/changed files, prepare stable copies of those files only,
+   and rsync them into destination staging over SSH. Never transfer directly over
+   committed archive files. Reuse the same operations for push and pull; all SSH
+   connections originate on the initiating machine, with no reverse credentials.
+3. **Incorporate:** hold a per-host writer lock, validate staging and publish files
+   through temporary files and rename. Publish the manifest after its files.
 
-An archive-side incorporation step holds a per-host lock, validates paths and hashes,
-and copies verified files through temporary files and rename. Append-only transcripts
-may advance only if archived bytes are a prefix of incoming bytes. Shrinkage or prefix
-disagreement preserves the old archive and reports a conflict. Source absence never
-removes an archive member. Mutable companions are explicitly identified by adapters.
+Support Claude, Codex, Pi, Evener and OpenCode. The initial deployment excludes Hermes.
+Copy known companion files alongside the trace; accept modest duplication instead
+of introducing a shared-object system. Record relationships already present in source
+metadata when useful, but do not resolve a global session graph.
 
-Do not promise an atomic snapshot of multiple independently changing source files.
-Publish a manifest after its files. Interrupted incorporation may leave intact newer
-files with older metadata; a retry verifies those bytes and repairs the manifest.
-Never claim batch success before incorporation completes. Keep failed staging for
-retry/diagnosis; clean successful temporary batches. This requires no transaction
-journal or whole-archive rollback mechanism. Archive readers should avoid importing
-a host while its incorporation lock is held.
+For append-only transcripts, existing archived bytes must be a prefix of incoming
+bytes. Reject shrinkage or disagreement without replacing the archive. Source absence
+never deletes archive members. Adapters explicitly identify mutable companions.
 
-Normal runs may stat source trees and manifests; do not demand zero metadata reads.
-Skip unchanged payloads using recorded size/mtime hints, and verify changed copies.
-An explicit full verification/reconciliation detects same-size/same-mtime rewrites.
-Measure 100,000-trace discovery before adding an inventory database or sharding.
+There is no atomic snapshot across independently changing files. Capture a bounded
+length for a live append-only file; collect later appends next time. Open once, copy
+exactly the initially observed length from that descriptor, reject short reads, and
+hash the copied bytes. Do not reopen the pathname mid-capture. Check mutable-file
+metadata before and after copying and reject unstable reads. This detects ordinary
+concurrent changes; it is not a snapshot guarantee against adversarial file rewrites.
 
-## Database-backed harnesses
+An interrupted incorporation can leave intact newer files with an older manifest.
+Keep intended manifests and their hashes durably in destination staging until
+incorporation completes. Replay a fully transferred pending batch before new discovery
+or unchanged-file skipping, even if the source is now absent. Retry verifies those
+bytes and repairs metadata; no rollback journal. Readers should
+import after collection completes. Keep failed staging for diagnosis, report its
+location, and clean successful batches. Never mark a partial operation successful.
 
-For OpenCode, use sqlite3's online backup facility to create a consistent snapshot,
-including committed WAL data; never copy only a live main database file. Require the
-sqlite3 CLI only when such a harness is enabled. No embedded Go SQLite driver.
+The source produces a metadata inventory; the archive compares it with its manifests
+and returns the requested file list. Fixed helper commands exchange these ordinary
+JSON documents, without a persistent source catalog. The archive records source
+size/mtime hints only after successful incorporation, separately from archive file
+metadata. Push and pull use this same comparison. If identity cannot be recovered
+after a source root moves, preserve a separate capture rather than guessing a merge.
 
-Store each distinct snapshot once under:
+Normal runs may walk trees and read manifests. Size/mtime are change hints; --full
+reads all candidates and verifies content, catching rewrites those hints miss.
+Initially transfer changed files in full; do not promise byte-delta resume or zero
+metadata reads. Checksums describe captured bytes, not a parsed transcript.
+
+Stable source copies cost temporary space proportional to changed files. Keep this
+simple baseline. Direct live-file transfer is a possible future optimization, not
+a task or requirement for the first implementation.
+
+## Database exception
+
+OpenCode stores several sessions in one database. Use sqlite3 online backup to capture
+committed WAL data consistently. Store each distinct snapshot once under:
 
     <archive>/<user>/<host>/_sources/opencode/<source-id>/<snapshot-hash>/
         source.json
         raw/opencode.db
 
-Trace manifests identify their source snapshot and native session ID. This is a
-specific exception for shared databases, not a generic object store. Retain older
-snapshots because later databases can omit deleted sessions. Deduplicate identical
-snapshot bytes; no automatic pruning initially. Document potentially significant
-storage growth. Jesse approved this retention exception for database-backed harnesses.
+Trace manifests identify the native session and snapshot. Retain old snapshots because
+a later database may omit deleted sessions; deduplicate identical snapshot bytes.
+No automatic pruning. This approved exception can consume substantial space and must
+be reported/documented. It does not require an embedded SQLite driver or archive catalog.
 
-## Transport and access
+## What remains necessary
 
-Push prepares locally, rsyncs to remote staging, and invokes remote incorporation.
-Pull invokes remote preparation, rsyncs to local staging, and incorporates locally.
-The source never needs reverse credentials. Both endpoints need the CLI and rsync.
-Use SSH accounts and filesystem permissions for access; no new authorization layer.
-Use restrictive data permissions and preserve normal SSH host-key verification.
-Never interpolate discovered paths into shell commands; pass structured configuration
-to fixed helper commands. Validate host/destination arguments and quote remote shell
-arguments correctly when invoking rsync. Staging paths must not escape their roots.
+Restrictive permissions, SSH host verification, safe command arguments, path validation,
+and refusing symlinks that escape source/archive roots. Both endpoints need the tool
+and rsync; only sources with database harnesses need sqlite3. Offline roots and partial
+discovery are errors, not evidence that archived content should disappear.
 
-## AgentsView and validation
+Test real push/pull, multiple roots, collisions, append/conflict handling, interruption,
+source deletion, and WAL snapshots. Measure 100,000 traces before adding indexing or
+sharding. Prove one small AgentsView import separately; do not make a general importer
+part of the archiver. Raw capture completeness and viewer completeness are distinct.
+Server backups and automatic remote installation remain outside scope.
 
-The archive is the deliverable; AgentsView is a consumer. Prove a small disposable
-native-layout import on synthetic fixtures before building any broad view-generation
-subsystem. Report unsupported import shapes, including historical shared snapshots,
-without claiming complete indexing. Viewer failures never prevent raw preservation.
+## Why this approach
 
-Test repeated runs, appends, truncation, interrupted transfers/incorporation, source
-deletion, name collisions, multiple harness roots, companions and malformed content.
-Exercise both push and pull over real SSH and SQLite capture with a live WAL writer.
-Measure a 100,000-trace fixture. Verify archive bytes independently of viewer counts.
-Roll out locally first, then enroll specifically chosen remote hosts. Separate archive
-server backups remain outside this tool's scope.
+Separate push/pull implementations duplicate logic. Reverse pushes add connectivity
+requirements. A custom protocol duplicates rsync; a catalog and session graph solve
+problems not yet measured. The chosen implementation is a harness-aware collector,
+existing transport tools, and a conservative destination writer.
 
-## Research
-
-AgentsView v0.46.1 provider code distinguishes physical captures from logical sessions,
-includes Claude/Codex/Evener companion files, and uses online backup for database
-sources. Its project identity code separates repository identity from worktrees.
-These findings inform adapters; the archive does not depend on its private format.
+AgentsView v0.46.1 provider research established the need for companion files, distinct
+source/session identities and online SQLite backup. Its viewer-specific normalization
+and private archive format are not requirements for this tool.

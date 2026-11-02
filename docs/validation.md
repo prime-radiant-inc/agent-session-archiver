@@ -96,3 +96,16 @@ Claude from one remote host. Those task-created copies were preserved separately
 before scheduling correct Codex capture. Original remote files were not changed.
 Do not interpret earlier historical Claude discovery totals as final classified
 session counts. Bulk rollout and its final verification remain outstanding.
+
+The adapter review found no Critical or Important issues. Its two Minor notes were
+addressed by asserting actual refreshed Grok summary bytes and correcting the
+project-discovery overview. The private native M5Max inventory discovers 27,165
+records without errors; this remains discovery evidence, not completed transfer.
+
+Actual cached OpenCode backups on macOS exposed an Apple SQLite failure opening a
+standalone WAL-mode backup read-only without sidecar files. A real SQLite regression
+first failed because enumeration created WAL/SHM sidecars. Completed backups now use
+an immutable read-only URI; the live source still uses SQLite online backup. The
+race/SSH/viewer suite and vet pass, and all three affected real cached databases now
+enumerate their sessions successfully on M5Max. Only the already-completed private
+backup is opened immutable; a changing live database must never use that mode.

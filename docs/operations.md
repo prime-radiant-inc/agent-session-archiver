@@ -110,7 +110,9 @@ the variable the SSH test explicitly skips. No real transcripts are test fixture
 ## OpenCode
 
 The adapter uses the sqlite3 CLI's online backup command and queries the resulting
-snapshot, not a changing live session table. It currently recognizes the native
+snapshot, not a changing live session table. Completed snapshots are queried as
+immutable SQLite files, so enumeration needs no WAL/SHM sidecars and does not change
+the backup. Live databases still use the normal online-backup connection. It currently recognizes the native
 `session(id, directory, ...)` table. If that schema is unsupported, the raw snapshot
 still transfers and the run reports incomplete session discovery. No SQLite library
 is linked into the archiver. A distinct snapshot stores the full database, so frequent

@@ -142,3 +142,24 @@ func TestSQLiteOnlyRequiredForDatabaseHarness(t *testing.T) {
 		t.Fatal("missing sqlite3 not reported")
 	}
 }
+
+func TestOpenCodeSnapshotQueriesNeedNoJournalSidecars(t *testing.T) {
+	root := t.TempDir()
+	sql(t, filepath.Join(root, "opencode.db"), "PRAGMA journal_mode=WAL; CREATE TABLE session(id TEXT, directory TEXT); INSERT INTO session VALUES('saved','/gone');")
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"opencode": {Directories: []string{root}}}}, root)
+	for _, scratch := range inv.Scratch {
+		defer os.RemoveAll(scratch)
+	}
+	if len(inv.Errors) != 0 || len(inv.Traces) != 2 {
+		t.Fatalf("%+v", inv)
+	}
+	for _, scratch := range inv.Scratch {
+		entries, err := os.ReadDir(scratch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "snapshot.db" {
+			t.Fatalf("reading standalone backup created journal sidecars: %v", entries)
+		}
+	}
+}

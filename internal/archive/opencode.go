@@ -37,10 +37,13 @@ func discoverOpenCode(ctx context.Context, h Host, root string) ([]Manifest, str
 	capture.ID = TraceID(h.User, h.Host, "opencode", root, capture.NativeID)
 	capture.Members = []Member{{Path: "opencode.db", Source: db, Size: size}}
 	traces := []Manifest{capture}
-	cmd = exec.CommandContext(ctx, "sqlite3", "-batch", "-readonly", "-init", "/dev/null", "-json", snapshot, "SELECT id, directory FROM session ORDER BY id;")
+	// The completed backup is self-contained and never changes during discovery.
+	// Immutable mode avoids WAL/SHM sidecars, which Apple SQLite cannot create read-only.
+	snapshotURI := (&url.URL{Scheme: "file", Path: snapshot}).String() + "?mode=ro&immutable=1"
+	cmd = exec.CommandContext(ctx, "sqlite3", "-batch", "-readonly", "-init", "/dev/null", "-json", snapshotURI, "SELECT id, directory FROM session ORDER BY id;")
 	b, e := cmd.CombinedOutput()
 	if e != nil {
-		return traces, scratch, fmt.Errorf("snapshot preserved but unsupported OpenCode session schema: %w: %s", e, b)
+		return traces, scratch, fmt.Errorf("snapshot preserved but OpenCode session query failed: %w: %s", e, b)
 	}
 	var sessions []struct {
 		ID        string `json:"id"`

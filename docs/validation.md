@@ -35,6 +35,9 @@ transcripts and rollout logs remain private.
   unique source bytes in the measured inventory. Hard links share stable tool-owned
   copies, with copy fallback and rename-based updates. They never link live sources.
   Editing archive files in place can affect other linked paths: restore by copying.
+- HDD validation in hash-ID order caused scattered reads across projects. Discovery,
+  batch checking/publication and verification now follow archive-path order. The
+  existing behavioral checks still pass; physical layout can still limit throughput.
 - Disposable source staging does not flush each file to durable storage. This removes
   measured journal waits; source power loss before transfer requires recapture.
   Destination validation and durability barriers remain enabled.

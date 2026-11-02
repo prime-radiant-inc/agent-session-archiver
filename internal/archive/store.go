@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -144,6 +145,8 @@ func placed(m Manifest, existing map[string]Manifest) Manifest {
 	return m
 }
 func batchMembers(root, batch string, traces []Manifest, existing map[string]Manifest) error {
+	// Match transfer directory order to avoid seeking between projects on HDDs.
+	sort.Slice(traces, func(i, j int) bool { return traces[i].Dir() < traces[j].Dir() })
 	seen := map[string]bool{}
 	for _, m := range traces {
 		if e := validateManifest(m); e != nil {
@@ -490,7 +493,12 @@ func Verify(root string) error {
 		return e
 	}
 	var errs []error
+	traces := make([]Manifest, 0, len(all))
 	for _, m := range all {
+		traces = append(traces, m)
+	}
+	sort.Slice(traces, func(i, j int) bool { return traces[i].Dir() < traces[j].Dir() })
+	for _, m := range traces {
 		if m.Snapshot != "" && !m.SourceCapture {
 			captureID := TraceID(m.User, m.Host, "opencode", m.Root, "@snapshot:"+m.Snapshot)
 			if capture, ok := all[captureID]; !ok || !capture.SourceCapture {

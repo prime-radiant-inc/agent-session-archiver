@@ -211,7 +211,7 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 		}
 	}
 	inv.Traces = grouped
-	sort.Slice(inv.Traces, func(i, j int) bool { return inv.Traces[i].ID < inv.Traces[j].ID })
+	sort.Slice(inv.Traces, func(i, j int) bool { return inv.Traces[i].Dir() < inv.Traces[j].Dir() })
 	return inv
 }
 func addMember(m *Manifest, p, rel string, mutable bool) error {

@@ -208,3 +208,66 @@ func TestCompressedCodexAndSharedIndex(t *testing.T) {
 		t.Fatal("moved session missing")
 	}
 }
+
+func TestPartialDiscoveryAndInternalLinks(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "projects/p/a.jsonl")
+	put(t, p, "{}\n")
+	put(t, filepath.Join(root, "projects/p/z.jsonl"), "{}\n")
+	if e := os.Symlink(p, filepath.Join(root, "projects/p/b.jsonl")); e != nil {
+		t.Fatal(e)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	put(t, outside, "private")
+	if e := os.Symlink(outside, filepath.Join(root, "projects/p/c.jsonl")); e != nil {
+		t.Fatal(e)
+	}
+	h := Host{User: "u", Host: "h", Harnesses: map[string]Harness{"claude": {Directories: []string{root}}}}
+	inv := Discover(context.Background(), h, root)
+	if len(inv.Traces) != 3 || len(inv.Errors) != 1 {
+		t.Fatalf("traces=%d errors=%v", len(inv.Traces), inv.Errors)
+	}
+}
+func TestEvenerIgnoresSessionArtifactTrees(t *testing.T) {
+	root := t.TempDir()
+	put(t, filepath.Join(root, "projects/p/sessions/e.transcript.jsonl"), "{\"session_id\":\"e\",\"working_dir\":\"/project\"}\n")
+	link := filepath.Join(root, "projects/p/sessions/e/artifacts/node_modules")
+	os.MkdirAll(filepath.Dir(link), 0700)
+	os.Symlink(t.TempDir(), link)
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"evener": {Directories: []string{root}}}}, root)
+	if len(inv.Errors) != 0 || len(inv.Traces) != 1 {
+		t.Fatal(inv)
+	}
+}
+
+func TestCodexOwnIDPrecedesParentSessionID(t *testing.T) {
+	root := t.TempDir()
+	for _, id := range []string{"child-one", "child-two"} {
+		put(t, filepath.Join(root, "sessions", id+".jsonl"), "{\"type\":\"session_meta\",\"payload\":{\"id\":\""+id+"\",\"session_id\":\"parent\",\"cwd\":\"/project\"}}\n")
+	}
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"codex": {Directories: []string{root}}}}, root)
+	if len(inv.Traces) != 2 || inv.Traces[0].ID == inv.Traces[1].ID {
+		t.Fatal("children collapsed onto parent identity")
+	}
+}
+
+func TestClaudeSubagentCompanions(t *testing.T) {
+	root := t.TempDir()
+	put(t, filepath.Join(root, "projects/p/parent/subagents/agent-a.jsonl"), "{}\n")
+	put(t, filepath.Join(root, "projects/p/parent/tool-results/result.jsonl"), "{\"tool\":\"output\"}\n")
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"claude": {Directories: []string{root}}}}, root)
+	if len(inv.Traces) != 1 || len(inv.Traces[0].Members) != 2 {
+		t.Fatal("subagent companion lost or treated as session", inv)
+	}
+}
+
+func TestMultipleNativeFilesShareOneTrace(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{"sessions/page-one.jsonl", "archived_sessions/page-two.jsonl"} {
+		put(t, filepath.Join(root, p), "{\"type\":\"session_meta\",\"payload\":{\"id\":\"same-session\",\"cwd\":\"/project\"}}\n")
+	}
+	inv := Discover(context.Background(), Host{User: "u", Host: "h", Harnesses: map[string]Harness{"codex": {Directories: []string{root}}}}, root)
+	if len(inv.Traces) != 1 || len(inv.Traces[0].Members) != 2 {
+		t.Fatal("native files were lost or duplicated as traces", len(inv.Traces))
+	}
+}

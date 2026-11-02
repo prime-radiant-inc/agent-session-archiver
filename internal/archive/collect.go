@@ -88,15 +88,30 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 				continue
 			}
 			for _, walk := range walks {
-				err := filepath.WalkDir(walk, func(p string, d fs.DirEntry, e error) error {
+				visit := func(p string, d fs.DirEntry, e error) error {
 					if e != nil {
 						return e
 					}
 					if err := ctx.Err(); err != nil {
 						return err
 					}
+					if name == "evener" && d.IsDir() && p != walk {
+						return filepath.SkipDir
+					}
+					if name == "claude" && d.IsDir() && d.Name() == "tool-results" {
+						return filepath.SkipDir
+					}
 					if d.Type()&os.ModeSymlink != 0 {
-						return fmt.Errorf("symlink source refused: %s", p)
+						if e := safeSource(root, p); e != nil {
+							return e
+						}
+						target, e := os.Stat(p)
+						if e != nil {
+							return e
+						}
+						if target.IsDir() {
+							return fmt.Errorf("directory symlink not traversed: %s", p)
+						}
 					}
 					if d.IsDir() {
 						return nil
@@ -109,6 +124,9 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 					}
 					rel, e := filepath.Rel(root, p)
 					if e != nil {
+						return e
+					}
+					if e := safeSource(root, p); e != nil {
 						return e
 					}
 					id, cwd := metadata(p, name)
@@ -141,24 +159,40 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 						}
 					}
 					if name == "claude" {
-						side := strings.TrimSuffix(p, ".jsonl") + "/tool-results"
-						if _, e := os.Stat(side); e == nil {
-							if e = filepath.WalkDir(side, func(q string, v fs.DirEntry, e error) error {
-								if e != nil {
+						sides := []string{strings.TrimSuffix(p, ".jsonl") + "/tool-results"}
+						if idx := strings.Index(p, "/subagents/"); idx >= 0 {
+							sides = append(sides, filepath.Join(p[:idx], "tool-results"))
+						}
+						for _, side := range sides {
+							if _, e := os.Stat(side); e == nil {
+								if e = filepath.WalkDir(side, func(q string, v fs.DirEntry, e error) error {
+									if e != nil {
+										return e
+									}
+									if v.IsDir() {
+										return nil
+									}
+									r, _ := filepath.Rel(root, q)
+									return addMember(&m, q, r, true)
+								}); e != nil {
 									return e
 								}
-								if v.IsDir() {
-									return nil
-								}
-								r, _ := filepath.Rel(root, q)
-								return addMember(&m, q, r, true)
-							}); e != nil {
-								return e
 							}
 						}
 					}
 					inv.Traces = append(inv.Traces, m)
 					return nil
+				}
+				err := filepath.WalkDir(walk, func(p string, d fs.DirEntry, e error) error {
+					err := visit(p, d, e)
+					if err != nil && err != filepath.SkipDir {
+						inv.Errors = append(inv.Errors, fmt.Sprintf("%s: %v", p, err))
+						if ctx.Err() != nil {
+							return filepath.SkipAll
+						}
+						return nil
+					}
+					return err
 				})
 				if err != nil {
 					inv.Errors = append(inv.Errors, fmt.Sprintf("%s: %v", walk, err))
@@ -166,6 +200,17 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 			}
 		}
 	}
+	grouped := make([]Manifest, 0, len(inv.Traces))
+	index := map[string]int{}
+	for _, m := range inv.Traces {
+		if i, ok := index[m.ID]; ok {
+			grouped[i].Members = append(grouped[i].Members, m.Members...)
+		} else {
+			index[m.ID] = len(grouped)
+			grouped = append(grouped, m)
+		}
+	}
+	inv.Traces = grouped
 	sort.Slice(inv.Traces, func(i, j int) bool { return inv.Traces[i].ID < inv.Traces[j].ID })
 	return inv
 }
@@ -188,17 +233,17 @@ func safeSource(root, p string) error {
 	if e != nil || r == ".." || strings.HasPrefix(r, "../") {
 		return fmt.Errorf("source escapes root: %s", p)
 	}
-	// A configured root may itself be a symlink; all descendants must be real files.
-	at := root
-	for _, part := range strings.Split(r, string(filepath.Separator)) {
-		at = filepath.Join(at, part)
-		s, e := os.Lstat(at)
-		if e != nil {
-			return e
-		}
-		if s.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink source refused: %s", at)
-		}
+	canonicalRoot, e := filepath.EvalSymlinks(root)
+	if e != nil {
+		return e
+	}
+	canonicalFile, e := filepath.EvalSymlinks(p)
+	if e != nil {
+		return e
+	}
+	rel, e := filepath.Rel(canonicalRoot, canonicalFile)
+	if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return fmt.Errorf("symlink escapes source root: %s", p)
 	}
 	return nil
 }
@@ -231,7 +276,11 @@ func metadata(p, name string) (string, string) {
 				v = nested
 			}
 		}
-		for _, key := range []string{"session_id", "sessionId", "id"} {
+		keys := []string{"session_id", "sessionId", "id"}
+		if name == "codex" {
+			keys = []string{"id", "session_id"}
+		}
+		for _, key := range keys {
 			var s string
 			if json.Unmarshal(v[key], &s) == nil && s != "" && id == "" {
 				id = s

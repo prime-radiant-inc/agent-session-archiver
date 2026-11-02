@@ -14,7 +14,8 @@ Each configured harness root contains:
 
 Explicit roots replace defaults. Home expansion happens on the source. Only listed
 harnesses are enabled. Duplicate roots are rejected; root symlinks are allowed, but
-symlinks within roots are refused. Malformed message content is preserved.
+file symlinks must resolve within the configured root. Directory symlinks are
+reported instead of traversed. Malformed message content is preserved.
 
 Changed files are copied to source staging before transfer, so temporary free space
 must accommodate changed payloads. Copies use one descriptor, a bounded length, and
@@ -81,3 +82,17 @@ still transfers and the run reports incomplete session discovery. No SQLite libr
 is linked into the archiver. A distinct snapshot stores the full database, so frequent
 collection of a busy database can consume substantial space. Choose its schedule
 accordingly; identical snapshot bytes are deduplicated and no snapshots are pruned.
+
+## Scale and viewer checks
+
+`ASA_SCALE_TEST=1 go test -v ./internal/archive -run TestHundredThousandTraces`
+creates 100,000 synthetic sources and real manifest directories. On the initial Linux
+SSD run, discovery took 2.1 s, manifest scanning 2.6 s, and unchanged selection 59 ms.
+These measure metadata/discovery, not spinning-disk ingestion throughput or fsync cost.
+No sharding or inventory database is required by that measurement.
+
+`ASA_AGENTSVIEW_TEST=1 go test -v ./internal/archive -run TestAgentsViewImportProof`
+uses an installed AgentsView and isolated HOME/data directories. It copies retained
+Claude bytes into one native-layout view, verifies the imported session count and
+rechecks the source archive. This proves that import path only; historical OpenCode
+snapshot aggregation and complete multi-harness viewer imports remain separate work.

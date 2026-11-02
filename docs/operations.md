@@ -1,6 +1,6 @@
 # Operations
 
-Implementation is in progress; commands are not yet released.
+Build from source using the instructions below; no packaged release is published.
 
 Each configured harness root contains:
 
@@ -68,6 +68,14 @@ only after success. Interrupted transfers leave incoming staging for inspection;
 recovery verifies an unacknowledged batch before replaying it, so incomplete
 network transfers never publish. Recovery is scoped to the selected host; another
 host's retained conflict does not block it.
+
+## Scheduling
+
+Run push or pull from an external scheduler such as cron, a systemd timer or launchd.
+Use an absolute executable and config path, retain command output, and alert on a
+nonzero exit status. Choose the interval according to acceptable loss before capture;
+there is no filesystem watcher. Avoid overlapping runs for the same host. SSH must
+work without an interactive prompt under the scheduler's account.
 
 ## Development checks
 

@@ -37,3 +37,37 @@ is retained for diagnosis; successful batches are removed. Do not edit ready.jso
 To discard an unrecoverable conflicting batch, inspect it and remove only its named
 .incoming/batch-* directory; never delete archive trace directories to clear a conflict.
 Verification checks hashes/sizes without needing source directories.
+
+## SSH commands
+
+Build with `go build -o bin/agent-session-archiver ./cmd/agent-session-archiver`.
+Install this executable as `agent-session-archiver` on the noninteractive SSH PATH
+of both endpoints. Both need rsync 3.x (including on macOS); source-side SQLite is
+needed only for OpenCode. Normal SSH configuration and host-key checking apply.
+
+```
+agent-session-archiver --config config.toml pull --all
+agent-session-archiver --config config.toml pull laptop
+agent-session-archiver --config config.toml push laptop archive:/srv/agent-traces
+agent-session-archiver --config config.toml verify
+```
+
+The default config path is ~/.config/agent-session-archiver/config.toml. Flags may
+appear before or after commands. Archive paths are absolute. Destination connections
+use SSH aliases/hostnames; configure IPv6 addresses through an SSH alias. Push reads
+the selected host record locally and ignores its ssh field. --full forces content
+capture despite unchanged metadata. Exit status is 0 for success, 1 for operational
+failure (including partial collection), 2 for invalid arguments/configuration.
+
+Pull --all runs sequentially and continues after a failed host. Reported selected
+counts are traces requiring transfer, not a promise of successful incorporation;
+check exit status. Source batches use the source process's TMPDIR and are removed
+only after success. Interrupted transfers leave incoming staging for inspection;
+only ready batches are replayed, so incomplete network transfers never publish.
+
+## Development checks
+
+Run `go test -race ./...` and `go vet ./...`. The real SSH integration gate is
+`ASA_SSH_TEST=1 go test ./...`; it requires ssh, sshd, ssh-keygen and rsync. It uses
+a disposable loopback server, temporary keys and strict host verification. Without
+the variable the SSH test explicitly skips. No real transcripts are test fixtures.

@@ -104,10 +104,15 @@ func Select(in []Manifest, old map[string]Manifest, full bool) []Manifest {
 		for _, v := range prev.Members {
 			members[v.Path] = v
 		}
-		for _, v := range m.Members {
+		m.Members = append([]Member(nil), m.Members...)
+		for i := range m.Members {
+			v := &m.Members[i]
 			p, ok := members[v.Path]
+			v.SHA256 = ""
 			if !ok || p.Size != v.Size || p.Mtime != v.Mtime {
 				changed = true
+			} else if !full {
+				v.SHA256 = p.SHA256
 			}
 		}
 		if changed {

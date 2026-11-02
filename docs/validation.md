@@ -79,3 +79,20 @@ It runs a full archive verification after the first successful sync of all enrol
 hosts, then checks that every original capture identity remains present. These
 inventory counts are not completed-transfer counts; final rollout verification
 is outstanding. Renaming original historical directories remains explicitly paused.
+
+## M5Max additions
+
+Lace and Grok adapters use the existing ordinary-file capture and retention path.
+Real-file regressions cover Lace filename collisions and source deletion, and Grok
+whole-session capture, companion refresh, append, shrink rejection and source
+deletion. Both failed for unsupported harnesses before implementation. The full
+race/SSH/viewer suite and vet pass after the additions.
+
+M5Max's historical stores exposed mixed Claude/Codex conversation archives. A
+regression reproduced three discovered traces instead of two; Claude archive
+collection now excludes Codex session headers, and Codex year subtrees are enrolled
+separately. The initial deployment had already published 177 such records under
+Claude from one remote host. Those task-created copies were preserved separately
+before scheduling correct Codex capture. Original remote files were not changed.
+Do not interpret earlier historical Claude discovery totals as final classified
+session counts. Bulk rollout and its final verification remain outstanding.

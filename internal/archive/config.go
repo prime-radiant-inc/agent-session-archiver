@@ -30,7 +30,7 @@ type SourceRoot struct {
 	Archive bool
 }
 
-var defaults = map[string]string{"claude": ".claude", "codex": ".codex", "pi": ".pi/agent", "evener": ".local/state/evener", "opencode": ".local/share/opencode"}
+var defaults = map[string]string{"claude": ".claude", "codex": ".codex", "pi": ".pi/agent", "evener": ".local/state/evener", "opencode": ".local/share/opencode", "lace": ".lace", "grok": ".grok"}
 var identityPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$`)
 
 func validIdentity(s string) bool { return identityPattern.MatchString(s) }

@@ -371,3 +371,20 @@ archives=["~/old-pi"]
 		t.Fatalf("source modified: %s %v", b, err)
 	}
 }
+
+func TestClaudeHistoricalRootDoesNotMislabelCodex(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "history")
+	put(t, filepath.Join(root, "project/claude.jsonl"), `{"sessionId":"claude","cwd":"/gone"}`+"\n")
+	put(t, filepath.Join(root, "2026/rollout.jsonl"), `{"type":"session_meta","payload":{"id":"codex","cwd":"/gone"}}`+"\n")
+	h := Host{User: "u", Host: "h", Harnesses: map[string]Harness{"claude": {Archives: []string{root}}, "codex": {Archives: []string{filepath.Join(root, "2026")}}}}
+	inv := Discover(context.Background(), h, home)
+	if len(inv.Errors) != 0 || len(inv.Traces) != 2 {
+		t.Fatalf("got %d traces, errors %v", len(inv.Traces), inv.Errors)
+	}
+	for _, m := range inv.Traces {
+		if m.NativeID != m.Harness {
+			t.Fatalf("mislabelled trace: %+v", m)
+		}
+	}
+}

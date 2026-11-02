@@ -67,6 +67,10 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 							walks = append(walks, p)
 						}
 					}
+				case "lace":
+					walks = []string{filepath.Join(root, "transcripts")}
+				case "grok":
+					walks = []string{filepath.Join(root, "sessions")}
 				case "pi":
 					walks = []string{filepath.Join(root, "sessions")}
 				case "evener":
@@ -121,6 +125,22 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 							return fmt.Errorf("directory symlink not traversed: %s", p)
 						}
 					}
+					if name == "grok" {
+						if !d.IsDir() {
+							return nil
+						}
+						_, summaryErr := os.Stat(filepath.Join(p, "summary.json"))
+						_, historyErr := os.Stat(filepath.Join(p, "chat_history.jsonl"))
+						if summaryErr != nil && historyErr != nil {
+							return nil
+						}
+						m, err := grokSession(ctx, h, root, p)
+						if err != nil {
+							return err
+						}
+						inv.Traces = append(inv.Traces, m)
+						return filepath.SkipDir
+					}
 					if d.IsDir() {
 						return nil
 					}
@@ -140,7 +160,13 @@ func Discover(ctx context.Context, h Host, home string) Inventory {
 					if name == "codex" && filepath.Base(p) == "session_index.jsonl" {
 						return nil
 					}
-					id, cwd, recordedRemote := metadata(p, name)
+					id, cwd, recordedRemote, codexHeader := metadata(p, name)
+					if name == "claude" && source.Archive && codexHeader {
+						return nil
+					}
+					if name == "lace" {
+						id = filepath.ToSlash(rel)
+					}
 					companion := ""
 					if name == "evener" {
 						meta := strings.TrimSuffix(p, ".transcript.jsonl") + ".meta.json"
@@ -276,17 +302,17 @@ func safeSource(root, p string) error {
 	}
 	return nil
 }
-func metadata(p, name string) (string, string, string) {
+func metadata(p, name string) (string, string, string, bool) {
 	f, e := os.Open(p)
 	if e != nil {
-		return "", "", ""
+		return "", "", "", false
 	}
 	defer f.Close()
 	var r io.Reader = f
 	if strings.HasSuffix(p, ".zst") {
 		z, e := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
 		if e != nil {
-			return "", "", ""
+			return "", "", "", false
 		}
 		defer z.Close()
 		r = z
@@ -294,10 +320,15 @@ func metadata(p, name string) (string, string, string) {
 	scanner := bufio.NewScanner(io.LimitReader(r, 1024*1024))
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	id, cwd, recordedRemote := "", "", ""
+	codexHeader := false
 	for n := 0; n < 32 && scanner.Scan(); n++ {
 		var v map[string]json.RawMessage
 		if json.Unmarshal(scanner.Bytes(), &v) != nil {
 			continue
+		}
+		var recordType string
+		if json.Unmarshal(v["type"], &recordType) == nil && recordType == "session_meta" && v["payload"] != nil {
+			codexHeader = true
 		}
 		if name == "codex" {
 			var nested map[string]json.RawMessage
@@ -331,7 +362,7 @@ func metadata(p, name string) (string, string, string) {
 			break
 		}
 	}
-	return id, cwd, recordedRemote
+	return id, cwd, recordedRemote, codexHeader
 }
 
 func evenerRepository(p string) string {

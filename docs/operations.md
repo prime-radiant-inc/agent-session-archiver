@@ -11,6 +11,8 @@ Each configured harness root contains:
 | Pi | sessions/ |
 | Evener | projects/*/sessions/; project worktrees are not traversed |
 | OpenCode | opencode.db (database capture requires sqlite3) |
+| Lace | transcripts/; native JSONL files retain their relative-path identities |
+| Grok | sessions/; each session directory, including metadata and attachments |
 
 For historical trees that contain session files directly, use `archives` alongside
 (or instead of) `directories`, for example:
@@ -21,7 +23,7 @@ directories = ["~/.claude"]
 archives = ["~/.config/superpowers/conversation-archive"]
 ```
 
-Archive roots are supported for Claude, Codex, Pi and Evener. Claude, Codex and Pi
+Archive roots are supported for Claude, Codex, Pi, Evener, Lace and Grok. Claude, Codex, Pi and Lace
 walk the configured tree; Evener reads its direct session files without descending
 into artifacts. Claude summary text and known companions are retained. OpenCode
 backup directories use `directories` and must contain `opencode.db`. Originals stay
@@ -154,3 +156,24 @@ private local configuration, outside this repository. Test a fresh noninteractiv
 SSH connection: an existing multiplexed connection can mask an unusable unattended
 key. Run a full archive verification after the initial successful sync; repeating a
 full content read every hour can consume the entire interval on a spinning disk.
+
+
+## Lace, Grok and mixed historical trees
+
+Lace defaults to `~/.lace` and Grok to `~/.grok`. Both accept multiple `directories`
+or direct session-tree `archives`. Lace keeps each JSONL file byte-for-byte; a
+relative-path identity prevents same-named files in different directories colliding.
+If the transcript records no working directory, its project remains unknown.
+
+Grok captures each directory containing `summary.json` or `chat_history.jsonl` as
+one trace, including nested attachments and terminal output. Live `.lock` files are
+excluded. JSONL members are append-only; other session companions can refresh.
+Project discovery uses the summary's working directory, with its single recorded
+Git remote as a fallback when the repository is gone. Multiple unnamed remotes are
+not guessed. Missing/malformed summary metadata can fall back to the native encoded
+working-directory component. Original bytes, including malformed records, remain.
+
+A historical directory named `conversation-archive` may contain Codex rollouts as
+well as Claude files. Claude archive discovery skips records with Codex session
+headers. Configure the Codex subtree (often a year directory) under Codex `archives`
+as well to capture those records with the right harness and native session ID.

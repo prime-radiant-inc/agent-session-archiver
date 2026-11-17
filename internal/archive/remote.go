@@ -145,8 +145,7 @@ func inventoryErrors(inv Inventory) error {
 	}
 	return errors.Join(es...)
 }
-func Pull(ctx context.Context, h Host, root string, full bool) (Result, error) {
-	var result Result
+func Pull(ctx context.Context, h Host, root string, full bool) (result Result, err error) {
 	// Recovery precedes contact with the source, which may no longer exist.
 	if e := recoverHost(root, h.User, h.Host); e != nil {
 		return result, e
@@ -178,14 +177,17 @@ func Pull(ctx context.Context, h Host, root string, full bool) (Result, error) {
 	if !filepath.IsAbs(prepared.Batch) || strings.ContainsAny(prepared.Batch, "\r\n\x00") {
 		return result, fmt.Errorf("invalid remote batch")
 	}
+	// The source's outgoing batch is only a copy; remove it whether or not this pull succeeds.
+	defer func() {
+		if _, e := remote(context.Background(), h.SSH, request{Op: "cleanup", Batch: prepared.Batch}); e != nil && err == nil {
+			err = e
+		}
+	}()
 	if e = transfer(ctx, h.SSH+":"+prepared.Batch+"/", selection.Batch+"/"); e != nil {
 		return result, fmt.Errorf("incoming retained at %s: %w", selection.Batch, e)
 	}
 	if e = Incorporate(root, selection.Batch); e != nil {
 		return result, fmt.Errorf("incoming retained at %s: %w", selection.Batch, e)
-	}
-	if _, e = remote(ctx, h.SSH, request{Op: "cleanup", Batch: prepared.Batch}); e != nil {
-		return result, e
 	}
 	return result, inventoryErrors(inv)
 }

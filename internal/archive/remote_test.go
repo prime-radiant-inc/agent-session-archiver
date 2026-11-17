@@ -147,8 +147,28 @@ func TestSSHPushPull(t *testing.T) {
 	wrapper := filepath.Join(bin, "rsync")
 	put(t, wrapper, "#!/bin/sh\n'"+realRsync+"' --bwlimit=1 \"$@\" &\npid=$!\nsleep 0.1\nkill \"$pid\" 2>/dev/null\nwait \"$pid\"\nexit 23\n")
 	os.Chmod(wrapper, 0700)
+	// macOS sshd overrides TMPDIR, so ask the source where its outgoing batches go.
+	remoteTmp, e := exec.Command("ssh", "fixture", `printf %s "${TMPDIR:-/tmp}"`).Output()
+	if e != nil {
+		t.Fatal(e)
+	}
+	outgoing := func() map[string]bool {
+		found, _ := filepath.Glob(filepath.Join(string(remoteTmp), "agent-session-archiver-*"))
+		set := map[string]bool{}
+		for _, p := range found {
+			set[p] = true
+		}
+		return set
+	}
+	before := outgoing()
 	if _, e = Pull(context.Background(), h, root, false); e == nil {
 		t.Fatal("interrupted transfer reported success")
+	}
+	// A failed transfer must not strand the source's outgoing batch; the next pull prepares a fresh one.
+	for p := range outgoing() {
+		if !before[p] {
+			t.Fatalf("interrupted pull left an outgoing batch on the source: %s", p)
+		}
 	}
 	os.Remove(wrapper)
 	if e = Verify(root); e != nil {

@@ -30,14 +30,15 @@ func TestRecoveryDoesNotBlockOtherHosts(t *testing.T) {
 	if e := Incorporate(root, b); e != nil {
 		t.Fatal(e)
 	}
-	b, _ = makeBatch(t, root, src, "conflicting\n")
+	b, m := makeBatch(t, root, src, "old\nnew\n")
+	put(t, filepath.Join(b, m.Dir(), "raw/session.jsonl"), "tampered\n")
 	if e := Incorporate(root, b); e == nil {
-		t.Fatal("expected conflict")
+		t.Fatal("tampered batch incorporated")
 	}
-	m := Manifest{Version: 1, User: "u", Host: "healthy", Harness: "claude", Root: "/healthy", NativeID: "new", Project: "project"}
+	m = Manifest{Version: 1, User: "u", Host: "healthy", Harness: "claude", Root: "/healthy", NativeID: "new", Project: "project"}
 	m.ID = TraceID(m.User, m.Host, m.Harness, m.Root, m.NativeID)
 	if _, e := handle(context.Background(), request{Op: "select", Host: Host{User: "u", Host: "healthy"}, Root: root, Traces: []Manifest{m}}); e != nil {
-		t.Fatalf("healthy host blocked by h's retained conflict: %v", e)
+		t.Fatalf("healthy host blocked by h's retained batch: %v", e)
 	}
 }
 func TestConcurrentFirstCaptureRetainsPlacement(t *testing.T) {

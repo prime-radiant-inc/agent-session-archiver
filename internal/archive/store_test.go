@@ -37,16 +37,33 @@ func TestArchiveRetention(t *testing.T) {
 	if e := Incorporate(root, b); e != nil {
 		t.Fatal(e)
 	}
-	for _, content := range []string{"first\n", "WRONG\nsecond\n"} {
-		b, _ = makeBatch(t, root, src, content)
-		if e := Incorporate(root, b); e == nil {
-			t.Fatal("destructive change accepted")
-		}
-	}
 	dest := filepath.Join(root, m.Dir(), "raw/session.jsonl")
-	got, _ := os.ReadFile(dest)
-	if string(got) != "first\nsecond\n" {
-		t.Fatal("lost archive bytes")
+	// A rewritten or truncated transcript becomes current; each replaced version is
+	// kept beside it under its checksum and recorded in the manifest.
+	previous := "first\nsecond\n"
+	for _, content := range []string{"WRONG\nsecond\n", "first\n"} {
+		b, current := makeBatch(t, root, src, content)
+		if e := Incorporate(root, b); e != nil {
+			t.Fatalf("rewrite to %q: %v", content, e)
+		}
+		if got, _ := os.ReadFile(dest); string(got) != content {
+			t.Fatalf("current bytes %q, want %q", got, content)
+		}
+		kept := filepath.Join(root, m.Dir(), "raw", supersededPath("session.jsonl", digest(previous)))
+		if got, _ := os.ReadFile(kept); string(got) != previous {
+			t.Fatalf("superseded bytes %q, want %q", got, previous)
+		}
+		archived, e := LoadManifests(root)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(Select([]Manifest{current}, archived, false)) != 0 {
+			t.Fatal("rewritten transcript selected again after incorporation")
+		}
+		previous = content
+	}
+	if all, _ := LoadManifests(root); len(all[m.ID].Members) != 3 {
+		t.Fatalf("manifest members %+v", all[m.ID].Members)
 	}
 	os.Remove(src)
 	if e := Verify(root); e != nil {
@@ -189,6 +206,38 @@ func TestSharedCompanionsUseIndependentArchiveLinks(t *testing.T) {
 	got, _ := os.ReadFile(second)
 	if string(got) != "shared bytes" {
 		t.Fatal("update changed another trace's retained bytes")
+	}
+	if e := Verify(root); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestInterruptedRewriteKeepsSupersededVersion(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "archive")
+	src := filepath.Join(t.TempDir(), "source")
+	b, m := makeBatch(t, root, src, "original\n")
+	if e := Incorporate(root, b); e != nil {
+		t.Fatal(e)
+	}
+	b, _ = makeBatch(t, root, src, "rewritten\n")
+	crash := errors.New("crash before publishing")
+	if e := incorporate(root, b, func(string, string) error { return crash }); !errors.Is(e, crash) {
+		t.Fatalf("interrupted incorporation: %v", e)
+	}
+	// The original must already be recorded and verifiable before the current path changes.
+	if e := Verify(root); e != nil {
+		t.Fatal(e)
+	}
+	if all, _ := LoadManifests(root); len(all[m.ID].Members) != 2 {
+		t.Fatalf("superseded version not recorded before publishing: %+v", all[m.ID].Members)
+	}
+	if e := Recover(root); e != nil {
+		t.Fatal(e)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, m.Dir(), "raw/session.jsonl")); string(got) != "rewritten\n" {
+		t.Fatalf("current bytes %q", got)
+	}
+	if all, _ := LoadManifests(root); len(all[m.ID].Members) != 2 {
+		t.Fatalf("replay duplicated the superseded version: %+v", all[m.ID].Members)
 	}
 	if e := Verify(root); e != nil {
 		t.Fatal(e)

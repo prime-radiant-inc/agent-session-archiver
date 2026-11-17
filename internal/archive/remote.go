@@ -75,6 +75,13 @@ func exchange(ctx context.Context, host string, req request, payload io.Reader, 
 		return e
 	}
 	ce := consume(out)
+	if ce == nil {
+		// Anything after the expected reply is a protocol error, and leaving it
+		// unread would block the helper and Wait.
+		if n, _ := out.Read(make([]byte, 1)); n > 0 {
+			ce = fmt.Errorf("unexpected output from %s helper", host)
+		}
+	}
 	if ce != nil {
 		cmd.Process.Kill()
 	}

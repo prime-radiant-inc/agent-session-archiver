@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,6 +102,8 @@ func TestReceiveBatchRejectsUnsafeStreams(t *testing.T) {
 		"entry after batch.json":  {file("batch.json", "[]"), file("late", "x")},
 		"duplicate entry":         {file("a", "x"), file("a", "y"), file("batch.json", "[]")},
 		"no batch.json":           {file("a", "x")},
+		"recovery marker":         {file("ready.json", "bad"), file("batch.json", "[]")},
+		"member outside raw":      {file("u/h/p/claude/id/trace.json", "{}"), file("batch.json", "[]")},
 		"batch.json as hard link": {file("a", "[]"), {name: "batch.json", link: "a", kind: tar.TypeLink}},
 	}
 	for name, entries := range cases {
@@ -170,5 +173,29 @@ func TestWriteBatchFailsWithoutManifestWhenSourceVanishes(t *testing.T) {
 	}
 	if bytes.Contains(stream.Bytes(), []byte("batch.json")) {
 		t.Fatal("failed capture still wrote batch.json")
+	}
+}
+
+func TestReceiveBatchCopiesWhenLinksFail(t *testing.T) {
+	d := t.TempDir()
+	shared := filepath.Join(d, "shared.jsonl")
+	put(t, shared, "shared\n")
+	trace := func(id string) Manifest {
+		m := Manifest{Version: 1, User: "u", Host: "h", Harness: "claude", Root: d, NativeID: id, Project: "project", ID: id}
+		if e := addMember(&m, shared, "shared.jsonl", false); e != nil {
+			t.Fatal(e)
+		}
+		return m
+	}
+	a, b := trace("a"), trace("b")
+	linkFile = func(string, string) error { return errors.New("links unsupported") }
+	t.Cleanup(func() { linkFile = os.Link })
+	batch := filepath.Join(d, "batch")
+	if e := stageBatch(context.Background(), batch, []Manifest{a, b}); e != nil {
+		t.Fatal(e)
+	}
+	got, _ := os.ReadFile(filepath.Join(batch, b.Dir(), "raw/shared.jsonl"))
+	if string(got) != "shared\n" {
+		t.Fatalf("copied member %q", got)
 	}
 }

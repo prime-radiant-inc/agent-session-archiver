@@ -12,11 +12,15 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 )
 
 // batchManifest is the stream's final entry. Its arrival is the only evidence
 // that every member before it was captured and transferred completely.
 const batchManifest = "batch.json"
+
+// linkFile shares received members; tests replace it to exercise the copy fallback.
+var linkFile = os.Link
 
 // WriteBatch captures the selected members of traces as a tar stream. Each member
 // is read through one descriptor, bounded to its size when opened, and hashed as
@@ -123,14 +127,20 @@ func captureOpened(f *os.File, info os.FileInfo, w io.Writer, mutable bool) (str
 }
 
 // ReceiveBatch unpacks a WriteBatch stream into an empty incoming batch
-// directory. It accepts only regular files and hard links to entries already
-// received, all confined to the batch, and writes batch.json only once the
+// directory. It accepts only batch.json and regular files or hard links to
+// earlier entries under a trace's raw directory, so a source cannot place
+// recovery markers such as ready.json. batch.json is published only once the
 // stream has ended cleanly after it. Members are not flushed: incorporation
 // verifies them and publishes durable copies.
 func ReceiveBatch(r io.Reader, batch string) error {
 	tr := tar.NewReader(r)
 	received := map[string]string{}
-	var manifest []byte
+	manifest := ""
+	defer func() {
+		if manifest != "" {
+			os.Remove(manifest)
+		}
+	}()
 	for {
 		h, e := tr.Next()
 		if e == io.EOF {
@@ -139,7 +149,7 @@ func ReceiveBatch(r io.Reader, batch string) error {
 		if e != nil {
 			return e
 		}
-		if manifest != nil {
+		if manifest != "" {
 			return fmt.Errorf("batch stream continues after %s", batchManifest)
 		}
 		if !filepath.IsLocal(h.Name) || path.Clean(h.Name) != h.Name || received[h.Name] != "" {
@@ -149,10 +159,22 @@ func ReceiveBatch(r io.Reader, batch string) error {
 			if h.Typeflag != tar.TypeReg {
 				return fmt.Errorf("invalid %s entry", batchManifest)
 			}
-			if manifest, e = io.ReadAll(tr); e != nil {
+			f, e := os.CreateTemp(batch, ".batch-")
+			if e != nil {
+				return e
+			}
+			manifest = f.Name()
+			_, e = io.Copy(f, tr)
+			if e == nil {
+				e = f.Sync()
+			}
+			if e = errors.Join(e, f.Close()); e != nil {
 				return e
 			}
 			continue
+		}
+		if i := strings.Index(h.Name, "/raw/"); i <= 0 || i+len("/raw/") == len(h.Name) {
+			return fmt.Errorf("batch entry %q is not a trace member", h.Name)
 		}
 		dest, e := checkedPath(batch, filepath.FromSlash(h.Name))
 		if e != nil {
@@ -169,7 +191,7 @@ func ReceiveBatch(r io.Reader, batch string) error {
 			if prior == "" {
 				return fmt.Errorf("batch entry %q links to unknown %q", h.Name, h.Linkname)
 			}
-			e = os.Link(prior, dest)
+			e = receiveLink(prior, dest)
 		default:
 			return fmt.Errorf("unsupported batch entry %q", h.Name)
 		}
@@ -178,10 +200,14 @@ func ReceiveBatch(r io.Reader, batch string) error {
 		}
 		received[h.Name] = dest
 	}
-	if manifest == nil {
+	if manifest == "" {
 		return fmt.Errorf("batch stream ended without %s", batchManifest)
 	}
-	return writeFile(filepath.Join(batch, batchManifest), manifest)
+	if e := renameSynced(manifest, filepath.Join(batch, batchManifest)); e != nil {
+		return e
+	}
+	manifest = ""
+	return nil
 }
 func receiveFile(r io.Reader, dest string) error {
 	out, e := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -190,6 +216,19 @@ func receiveFile(r io.Reader, dest string) error {
 	}
 	_, e = io.Copy(out, r)
 	return errors.Join(e, out.Close())
+}
+
+// receiveLink shares an earlier member, copying it where links are unavailable.
+func receiveLink(prior, dest string) error {
+	if linkFile(prior, dest) == nil {
+		return nil
+	}
+	f, e := os.Open(prior)
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	return receiveFile(f, dest)
 }
 func ReadBatch(dir string) ([]Manifest, error) {
 	var m []Manifest
@@ -229,7 +268,12 @@ func writeFile(p string, b []byte) error {
 	if e != nil {
 		return e
 	}
-	if e = os.Rename(tmp, p); e != nil {
+	return renameSynced(tmp, p)
+}
+
+// renameSynced moves a synced file into place and flushes the directory entry.
+func renameSynced(tmp, p string) error {
+	if e := os.Rename(tmp, p); e != nil {
 		return e
 	}
 	d, e := os.Open(filepath.Dir(p))

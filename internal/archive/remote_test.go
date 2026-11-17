@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -211,5 +212,27 @@ func TestRemoteArgumentValidation(t *testing.T) {
 		if _, _, e := destination(dest); e == nil {
 			t.Fatalf("accepted %q", dest)
 		}
+	}
+}
+func TestExchangeRejectsOutputAfterConsumer(t *testing.T) {
+	bin := t.TempDir()
+	// A helper that keeps writing after the reply its caller expects.
+	put(t, filepath.Join(bin, "ssh"), "#!/bin/sh\ncat >/dev/null\nexec head -c 1048576 /dev/zero\n")
+	os.Chmod(filepath.Join(bin, "ssh"), 0700)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	done := make(chan error, 1)
+	go func() {
+		done <- exchange(context.Background(), "fixture", request{Op: "send"}, nil, func(r io.Reader) error {
+			_, e := r.Read(make([]byte, 1))
+			return e
+		})
+	}()
+	select {
+	case e := <-done:
+		if e == nil || !strings.Contains(e.Error(), "unexpected output") {
+			t.Fatalf("trailing output: %v", e)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("exchange hung on trailing output")
 	}
 }

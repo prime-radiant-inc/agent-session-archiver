@@ -144,11 +144,9 @@ Treat archive raw files as immutable; restore by copying before editing. Filesys
 that cannot create a link fall back to copying. This saves shared Claude tool-result
 space without a separate object store or persistent index.
 
-Source preparation uses disposable temporary copies without per-file durability
-flushes. The receiver still validates transferred hashes and durably publishes the
-archive. A source-side power loss before transfer requires collecting again from the
-originals. After an interrupted SSH connection, a remote preparation process may
-finish independently; check it has stopped before removing its outgoing batch.
+Received batch members are written without per-file durability flushes; batch.json
+is synced. Incorporation still validates every hash and durably publishes the archive.
+A power loss before incorporation requires collecting again from the originals.
 
 An hourly systemd user timer can use `OnCalendar=hourly` with `Persistent=true`
 and a `Type=oneshot` service running the absolute `pull --all` command. Set

@@ -20,7 +20,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y sqlite3 rsync openssh-server
+          sudo apt-get install -y sqlite3 openssh-server
           sudo mkdir -p /run/sshd
       - run: go test -race ./...
       - run: go vet ./...

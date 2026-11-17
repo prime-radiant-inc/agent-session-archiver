@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -47,22 +48,50 @@ func destination(s string) (string, string, error) {
 	}
 	return host, filepath.Clean(root), nil
 }
-func remote(ctx context.Context, host string, req request) (response, error) {
-	var res response
+
+// exchange runs the helper on host, sends req followed by payload (if any) on its
+// stdin, and hands its stdout to consume. consume must read until it has what it
+// needs; a consume failure stops the helper.
+func exchange(ctx context.Context, host string, req request, payload io.Reader, consume func(io.Reader) error) error {
 	if !sshName.MatchString(host) {
-		return res, fmt.Errorf("invalid SSH destination %q", host)
+		return fmt.Errorf("invalid SSH destination %q", host)
 	}
 	b, e := json.Marshal(req)
 	if e != nil {
-		return res, e
+		return e
 	}
 	cmd := exec.CommandContext(ctx, "ssh", "-oBatchMode=yes", "-oConnectTimeout=10", host, "agent-session-archiver _helper")
 	cmd.Stdin = bytes.NewReader(b)
+	if payload != nil {
+		cmd.Stdin = io.MultiReader(cmd.Stdin, payload)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	raw, e := cmd.Output()
+	out, e := cmd.StdoutPipe()
 	if e != nil {
-		return res, fmt.Errorf("SSH %s: %w: %s", host, e, stderr.String())
+		return e
+	}
+	if e = cmd.Start(); e != nil {
+		return e
+	}
+	ce := consume(out)
+	if ce != nil {
+		cmd.Process.Kill()
+	}
+	if e = cmd.Wait(); e != nil {
+		e = fmt.Errorf("SSH %s: %w: %s", host, e, stderr.String())
+	}
+	return errors.Join(e, ce)
+}
+func remote(ctx context.Context, host string, req request) (response, error) {
+	var res response
+	var raw []byte
+	e := exchange(ctx, host, req, nil, func(r io.Reader) (e error) {
+		raw, e = io.ReadAll(r)
+		return e
+	})
+	if e != nil {
+		return res, e
 	}
 	e = json.Unmarshal(raw, &res)
 	return res, e
@@ -73,6 +102,23 @@ func Helper(ctx context.Context, in io.Reader, out io.Writer) error {
 	dec.DisallowUnknownFields()
 	if e := dec.Decode(&req); e != nil {
 		return e
+	}
+	switch req.Op {
+	case "send":
+		w := bufio.NewWriter(out)
+		if e := WriteBatch(ctx, w, req.Traces); e != nil {
+			return e
+		}
+		return w.Flush()
+	case "receive":
+		if e := validateBatchPath(req.Root, req.Batch); e != nil {
+			return e
+		}
+		// The batch stream follows the request on stdin.
+		if e := ReceiveBatch(io.MultiReader(dec.Buffered(), in), req.Batch); e != nil {
+			return e
+		}
+		return json.NewEncoder(out).Encode(response{})
 	}
 	res, e := handle(ctx, req)
 	if e != nil {
@@ -109,15 +155,6 @@ func handle(ctx context.Context, req request) (response, error) {
 		}
 	case "recover":
 		return res, recoverHost(req.Root, req.Host.User, req.Host.Host)
-	case "prepare":
-		batch, e := os.MkdirTemp("", "agent-session-archiver-")
-		if e != nil {
-			return res, e
-		}
-		res.Batch = batch
-		if e = Prepare(ctx, batch, req.Traces); e != nil {
-			return res, fmt.Errorf("prepare retained at %s: %w", batch, e)
-		}
 	case "incorporate":
 		return res, Incorporate(req.Root, req.Batch)
 	case "cleanup":
@@ -130,14 +167,6 @@ func handle(ctx context.Context, req request) (response, error) {
 	}
 	return res, nil
 }
-func transfer(ctx context.Context, source, dest string) error {
-	cmd := exec.CommandContext(ctx, "rsync", "-rtH", "--protect-args", "--chmod=Du=rwx,Dgo=,Fu=rw,Fgo=", "-e", "ssh -oBatchMode=yes -oConnectTimeout=10", "--", source, dest)
-	b, e := cmd.CombinedOutput()
-	if e != nil {
-		return fmt.Errorf("rsync: %w: %s", e, b)
-	}
-	return nil
-}
 func inventoryErrors(inv Inventory) error {
 	var es []error
 	for _, s := range inv.Errors {
@@ -145,7 +174,8 @@ func inventoryErrors(inv Inventory) error {
 	}
 	return errors.Join(es...)
 }
-func Pull(ctx context.Context, h Host, root string, full bool) (result Result, err error) {
+func Pull(ctx context.Context, h Host, root string, full bool) (Result, error) {
+	var result Result
 	// Recovery precedes contact with the source, which may no longer exist.
 	if e := recoverHost(root, h.User, h.Host); e != nil {
 		return result, e
@@ -170,19 +200,8 @@ func Pull(ctx context.Context, h Host, root string, full bool) (result Result, e
 	if result.Selected == 0 {
 		return result, inventoryErrors(inv)
 	}
-	prepared, e := remote(ctx, h.SSH, request{Op: "prepare", Traces: selection.Traces})
-	if e != nil {
-		return result, e
-	}
-	if !filepath.IsAbs(prepared.Batch) || strings.ContainsAny(prepared.Batch, "\r\n\x00") {
-		return result, fmt.Errorf("invalid remote batch")
-	}
-	// The source's outgoing batch is only a copy; remove it whether or not this pull succeeds.
-	defer func() {
-		_, e := remote(context.Background(), h.SSH, request{Op: "cleanup", Batch: prepared.Batch})
-		err = errors.Join(err, e)
-	}()
-	if e = transfer(ctx, h.SSH+":"+prepared.Batch+"/", selection.Batch+"/"); e != nil {
+	receive := func(r io.Reader) error { return ReceiveBatch(r, selection.Batch) }
+	if e = exchange(ctx, h.SSH, request{Op: "send", Traces: selection.Traces}, nil, receive); e != nil {
 		return result, fmt.Errorf("incoming retained at %s: %w", selection.Batch, e)
 	}
 	if e = Incorporate(root, selection.Batch); e != nil {
@@ -219,21 +238,30 @@ func Push(ctx context.Context, h Host, dest string, full bool) (Result, error) {
 	if result.Selected == 0 {
 		return result, inventoryErrors(inv)
 	}
-	prepared, e := handle(ctx, request{Op: "prepare", Traces: selection.Traces})
-	if e != nil {
-		return result, e
-	}
 	if !filepath.IsAbs(selection.Batch) || strings.ContainsAny(selection.Batch, "\r\n\x00") {
 		return result, fmt.Errorf("invalid remote batch")
 	}
-	if e = transfer(ctx, prepared.Batch+"/", server+":"+selection.Batch+"/"); e != nil {
-		return result, fmt.Errorf("outgoing retained at %s, incoming at %s: %w", prepared.Batch, selection.Batch, e)
+	stream, w := io.Pipe()
+	captured := make(chan error, 1)
+	go func() {
+		e := WriteBatch(ctx, w, selection.Traces)
+		w.CloseWithError(e)
+		captured <- e
+	}()
+	e = exchange(ctx, server, request{Op: "receive", Root: root, Batch: selection.Batch}, stream, func(r io.Reader) error {
+		_, e := io.Copy(io.Discard, r)
+		return e
+	})
+	// Unblock the capture if the destination stopped reading early.
+	stream.CloseWithError(io.ErrClosedPipe)
+	if ce := <-captured; ce != nil && !errors.Is(ce, io.ErrClosedPipe) {
+		e = errors.Join(ce, e)
+	}
+	if e != nil {
+		return result, fmt.Errorf("incoming retained at %s: %w", selection.Batch, e)
 	}
 	if _, e = remote(ctx, server, request{Op: "incorporate", Root: root, Batch: selection.Batch}); e != nil {
 		return result, fmt.Errorf("incoming retained at %s: %w", selection.Batch, e)
-	}
-	if _, e = handle(ctx, request{Op: "cleanup", Batch: prepared.Batch}); e != nil {
-		return result, e
 	}
 	return result, inventoryErrors(inv)
 }

@@ -32,7 +32,7 @@ func TestAgentsViewImportProof(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = Prepare(context.Background(), batch, inv.Traces); e != nil {
+	if e = stageBatch(context.Background(), batch, inv.Traces); e != nil {
 		t.Fatal(e)
 	}
 	if e = Incorporate(root, batch); e != nil {

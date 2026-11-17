@@ -35,10 +35,12 @@ harnesses are enabled. Duplicate roots are rejected; root symlinks are allowed, 
 file symlinks must resolve within the configured root. Directory symlinks are
 reported instead of traversed. Malformed message content is preserved.
 
-Changed files are copied to source staging before transfer, so temporary free space
-must accommodate changed payloads. Copies use one descriptor, a bounded length, and
-checksums. Append-only growth after the bounded read is picked up next time. Mutable
-companions require stable metadata across the read. --full bypasses metadata hints.
+Changed files stream straight from the source to the destination's incoming batch as
+a tar stream over the helper's SSH connection; the source stages nothing on disk.
+Each read uses one descriptor, a bounded length, and a checksum. Append-only growth
+after the bounded read is picked up next time. Mutable companions require stable
+metadata across the read. The stream ends with batch.json, so a capture failure or an
+interrupted connection never delivers it. --full bypasses metadata hints.
 
 Project discovery prefers the live Git origin/common directory. When the working
 repository is unavailable, it uses Codex session metadata, Evener companion metadata or a single Grok
@@ -67,8 +69,8 @@ Verification checks hashes/sizes without needing source directories.
 
 Build with `go build -o bin/agent-session-archiver ./cmd/agent-session-archiver`.
 Install this executable as `agent-session-archiver` on the noninteractive SSH PATH
-of both endpoints. Both need rsync 3.x (including on macOS); source-side SQLite is
-needed only for OpenCode. Normal SSH configuration and host-key checking apply.
+of both endpoints. No other transfer tool is needed; source-side SQLite is needed
+only for OpenCode. Normal SSH configuration and host-key checking apply.
 
 ```
 agent-session-archiver --config config.toml pull --all
@@ -86,8 +88,7 @@ failure (including partial collection), 2 for invalid arguments/configuration.
 
 Pull --all runs sequentially and continues after a failed host. Reported selected
 counts are traces requiring transfer, not a promise of successful incorporation;
-check exit status. Source batches use the source process's TMPDIR and are removed
-only after success. Interrupted transfers leave incoming staging for inspection;
+check exit status. Interrupted transfers leave incoming staging for inspection;
 recovery verifies an unacknowledged batch before replaying it, so incomplete
 network transfers never publish. Recovery is scoped to the selected host; another
 host's retained conflict does not block it.
@@ -103,7 +104,7 @@ work without an interactive prompt under the scheduler's account.
 ## Development checks
 
 Run `go test -race ./...` and `go vet ./...`. The real SSH integration gate is
-`ASA_SSH_TEST=1 go test ./...`; it requires ssh, sshd, ssh-keygen and rsync. It uses
+`ASA_SSH_TEST=1 go test ./...`; it requires ssh, sshd and ssh-keygen. It uses
 a disposable loopback server, temporary keys and strict host verification. Without
 the variable the SSH test explicitly skips. No real transcripts are test fixtures.
 
@@ -136,7 +137,7 @@ snapshot aggregation and complete multi-harness viewer imports remain separate w
 ## Shared companion files
 
 Stable copies inside a batch and identical files incorporated by that batch can share
-filesystem hard links. rsync preserves those links. Live source files are never
+filesystem hard links. The batch stream carries those links. Live source files are never
 hard-linked into staging or the archive. Updates use temporary files and rename,
 which detach the updated path rather than changing other traces' retained bytes.
 Treat archive raw files as immutable; restore by copying before editing. Filesystems

@@ -425,7 +425,7 @@ func recoverHost(root, user, host string) error {
 				continue
 			}
 			// A complete transfer can be recovered even if the initiating process
-			// never got to acknowledge rsync. Incomplete transfers stay staged.
+			// stopped before incorporating it. Incomplete transfers stay staged.
 			if e = batchMembers(root, batch, traces, existing); e != nil {
 				continue
 			}

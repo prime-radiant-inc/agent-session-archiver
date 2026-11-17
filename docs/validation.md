@@ -1,6 +1,6 @@
 # Implementation validation
 
-The implementation uses ordinary files, SSH and rsync. SQLite is only an optional
+The implementation uses ordinary files and SSH. SQLite is only an optional
 source-side dependency for OpenCode. Public fixtures are synthetic; host configuration,
 transcripts and rollout logs remain private.
 
@@ -48,9 +48,9 @@ select changed traces instead of transferring the whole corpus.
 - HDD validation in hash-ID order caused scattered reads across projects. Discovery,
   batch checking/publication and verification now follow archive-path order. The
   existing behavioral checks still pass; physical layout can still limit throughput.
-- Disposable source staging does not flush each file to durable storage. This removes
-  measured journal waits; source power loss before transfer requires recapture.
-  Destination validation and durability barriers remain enabled.
+- Sources stream captures without staging them on disk, and received batch members are
+  not flushed individually. Incorporation verifies every member and publishes it
+  through synced temporary files; power loss before that requires recapture.
 
 Native harness homes and explicitly configured historical session trees are supported.
 Arbitrarily rearranged backups are not automatically discovered, and raw capture does not promise every viewer will

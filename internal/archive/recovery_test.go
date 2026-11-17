@@ -48,7 +48,7 @@ func TestConcurrentFirstCaptureRetainsPlacement(t *testing.T) {
 	incoming[0].Project = "other-project"
 	incoming[0].Members[0].SHA256 = ""
 	other, _ := NewIncoming(root)
-	if e := Prepare(context.Background(), other, incoming); e != nil {
+	if e := stageBatch(context.Background(), other, incoming); e != nil {
 		t.Fatal(e)
 	}
 	if e := Incorporate(root, b); e != nil {

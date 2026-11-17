@@ -21,7 +21,7 @@ func makeBatch(t *testing.T, root, source, content string) (string, Manifest) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = Prepare(context.Background(), b, []Manifest{m}); e != nil {
+	if e = stageBatch(context.Background(), b, []Manifest{m}); e != nil {
 		t.Fatal(e)
 	}
 	return b, m
@@ -151,7 +151,7 @@ func TestSharedCompanionsUseIndependentArchiveLinks(t *testing.T) {
 		traces = append(traces, m)
 	}
 	batch, _ := NewIncoming(root)
-	if e := Prepare(context.Background(), batch, traces); e != nil {
+	if e := stageBatch(context.Background(), batch, traces); e != nil {
 		t.Fatal(e)
 	}
 	first := filepath.Join(batch, traces[0].Dir(), "raw/tool.txt")
@@ -180,7 +180,7 @@ func TestSharedCompanionsUseIndependentArchiveLinks(t *testing.T) {
 	m.Members = nil
 	addMember(&m, source, "tool.txt", true)
 	batch, _ = NewIncoming(root)
-	if e := Prepare(context.Background(), batch, []Manifest{m}); e != nil {
+	if e := stageBatch(context.Background(), batch, []Manifest{m}); e != nil {
 		t.Fatal(e)
 	}
 	if e := Incorporate(root, batch); e != nil {

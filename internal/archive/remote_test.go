@@ -17,7 +17,7 @@ func TestSSHPushPull(t *testing.T) {
 	if os.Getenv("ASA_SSH_TEST") != "1" {
 		t.Skip("skipped: set ASA_SSH_TEST=1 for real SSH integration")
 	}
-	for _, tool := range []string{"ssh", "sshd", "rsync", "ssh-keygen"} {
+	for _, tool := range []string{"ssh", "sshd", "ssh-keygen"} {
 		if _, e := exec.LookPath(tool); e != nil {
 			t.Fatal(e)
 		}
@@ -87,8 +87,24 @@ func TestSSHPushPull(t *testing.T) {
 	client := fmt.Sprintf("Host fixture\n HostName 127.0.0.1\n Port %d\n User %s\n IdentityFile %s\n IdentitiesOnly yes\n UserKnownHostsFile %s\n StrictHostKeyChecking yes\nHost offline\n HostName 127.0.0.1\n Port 1\n", port, u.Username, filepath.Join(d, "key"), filepath.Join(d, "known_hosts"))
 	put(t, filepath.Join(d, "ssh_config"), client)
 	realSSH, _ := exec.LookPath("ssh")
-	put(t, filepath.Join(bin, "ssh"), "#!/bin/sh\nexec '"+realSSH+"' -F '"+filepath.Join(d, "ssh_config")+"' \"$@\"\n")
+	// Writing "send" or "receive" to the sabotage file cuts that helper stream short
+	// after 1 KiB. The request's op is always its first JSON field.
+	sabotage := filepath.Join(d, "sabotage")
+	put(t, filepath.Join(bin, "ssh"), fmt.Sprintf(`#!/bin/sh
+ssh() { '%s' -F '%s' "$@"; }
+case "$*" in *_helper) ;; *) ssh "$@"; exit $?;; esac
+# Run the helper built for this test even when the login shell's PATH finds an installed one.
+for a; do shift; [ "$a" = "agent-session-archiver _helper" ] && a="'%s' _helper"; set -- "$@" "$a"; done
+prefix=$(dd bs=1 count=16 2>/dev/null)
+case "$(cat '%s' 2>/dev/null):$prefix" in
+send:'{"op":"send",'*) { printf %%s "$prefix"; cat; } | ssh "$@" | head -c 1024; exit 1;;
+receive:'{"op":"receive"'*) { printf %%s "$prefix"; head -c 1024; } | ssh "$@"; exit $?;;
+esac
+{ printf %%s "$prefix"; cat; } | ssh "$@"
+`, realSSH, filepath.Join(d, "ssh_config"), filepath.Join(bin, "agent-session-archiver"), sabotage))
 	os.Chmod(filepath.Join(bin, "ssh"), 0700)
+	put(t, filepath.Join(bin, "rsync"), "#!/bin/sh\necho 'rsync must not be used' >&2\nexit 1\n")
+	os.Chmod(filepath.Join(bin, "rsync"), 0700)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	// Paths deliberately contain characters that must not become shell syntax.
 	source := filepath.Join(d, "source ' $(nope)")
@@ -139,20 +155,12 @@ func TestSSHPushPull(t *testing.T) {
 			t.Fatal("push/pull bytes differ")
 		}
 	}
-	// Run a real throttled rsync and interrupt it before incorporation.
-	f, _ = os.OpenFile(filepath.Join(source, "projects/p/session.jsonl"), os.O_APPEND|os.O_WRONLY, 0600)
-	f.WriteString("{\"type\":\"assistant\"}\n")
-	f.Close()
-	realRsync, _ := exec.LookPath("rsync")
-	wrapper := filepath.Join(bin, "rsync")
-	put(t, wrapper, "#!/bin/sh\n'"+realRsync+"' --bwlimit=1 \"$@\" &\npid=$!\nsleep 0.1\nkill \"$pid\" 2>/dev/null\nwait \"$pid\"\nexit 23\n")
-	os.Chmod(wrapper, 0700)
-	// macOS sshd overrides TMPDIR, so ask the source where its outgoing batches go.
+	// macOS sshd overrides TMPDIR, so ask the source where it would stage files.
 	remoteTmp, e := exec.Command("ssh", "fixture", `printf %s "${TMPDIR:-/tmp}"`).Output()
 	if e != nil {
 		t.Fatal(e)
 	}
-	outgoing := func() map[string]bool {
+	staged := func() map[string]bool {
 		found, _ := filepath.Glob(filepath.Join(string(remoteTmp), "agent-session-archiver-*"))
 		set := map[string]bool{}
 		for _, p := range found {
@@ -160,33 +168,32 @@ func TestSSHPushPull(t *testing.T) {
 		}
 		return set
 	}
-	before := outgoing()
-	if _, e = Pull(context.Background(), h, root, false); e == nil {
-		t.Fatal("interrupted transfer reported success")
+	before := staged()
+	// Interrupt each direction mid-stream; neither may publish or leave source copies.
+	f, _ = os.OpenFile(filepath.Join(source, "projects/p/session.jsonl"), os.O_APPEND|os.O_WRONLY, 0600)
+	f.WriteString("{\"type\":\"assistant\",\"padding\":\"" + strings.Repeat("x", 4096) + "\"}\n")
+	f.Close()
+	put(t, sabotage, "send")
+	if _, e = Pull(context.Background(), h, root, false); e == nil || !strings.Contains(e.Error(), "incoming retained") {
+		t.Fatalf("interrupted pull: %v", e)
 	}
-	// A failed transfer must not strand the source's outgoing batch; the next pull prepares a fresh one.
-	for p := range outgoing() {
-		if !before[p] {
-			t.Fatalf("interrupted pull left an outgoing batch on the source: %s", p)
+	put(t, sabotage, "receive")
+	if _, e = Push(context.Background(), h, "fixture:"+other, false); e == nil || !strings.Contains(e.Error(), "incoming retained") {
+		t.Fatalf("interrupted push: %v", e)
+	}
+	os.Remove(sabotage)
+	for _, archive := range []string{root, other} {
+		if e = Verify(archive); e != nil {
+			t.Fatal(e)
 		}
 	}
-	// When the source also refuses cleanup, the pull must report that alongside the transfer failure.
-	sshWrapper := filepath.Join(bin, "ssh")
-	sshScript, _ := os.ReadFile(sshWrapper)
-	put(t, sshWrapper, "#!/bin/sh\ncase \"$*\" in *_helper) req=$(cat); case \"$req\" in *'\"op\":\"cleanup\"'*) echo 'cleanup refused' >&2; exit 1;; esac; printf %s \"$req\" | '"+realSSH+"' -F '"+filepath.Join(d, "ssh_config")+"' \"$@\"; exit $?;; esac\nexec '"+realSSH+"' -F '"+filepath.Join(d, "ssh_config")+"' \"$@\"\n")
-	_, e = Pull(context.Background(), h, root, false)
-	put(t, sshWrapper, string(sshScript))
-	for p := range outgoing() {
+	for p := range staged() {
 		if !before[p] {
-			os.RemoveAll(p)
+			t.Fatalf("transfer staged a copy on the source: %s", p)
 		}
 	}
-	if e == nil || !strings.Contains(e.Error(), "incoming retained") || !strings.Contains(e.Error(), "cleanup refused") {
-		t.Fatalf("pull with refused cleanup: %v", e)
-	}
-	os.Remove(wrapper)
-	if e = Verify(root); e != nil {
-		t.Fatal(e)
+	if r, e = Push(context.Background(), h, "fixture:"+other, false); e != nil || r.Selected != 1 {
+		t.Fatalf("push after interruption %+v: %v", r, e)
 	}
 	if _, e = Pull(context.Background(), h, root, false); e != nil {
 		t.Fatal(e)

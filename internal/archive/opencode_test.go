@@ -71,7 +71,7 @@ func TestOpenCodeSnapshots(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = Prepare(context.Background(), batch, inv.Traces); e != nil {
+	if e = stageBatch(context.Background(), batch, inv.Traces); e != nil {
 		t.Fatal(e)
 	}
 	if e = Incorporate(archive, batch); e != nil {
@@ -105,7 +105,7 @@ func TestOpenCodeSnapshots(t *testing.T) {
 	}
 	selected := Select(reset.Traces, old, false)
 	batch, _ = NewIncoming(archive)
-	if e = Prepare(context.Background(), batch, selected); e != nil {
+	if e = stageBatch(context.Background(), batch, selected); e != nil {
 		t.Fatal(e)
 	}
 	if e = Incorporate(archive, batch); e != nil {

@@ -74,7 +74,7 @@ func TestHundredThousandTraces(t *testing.T) {
 	if len(selected) != 1 {
 		t.Fatal("expected one changed trace", len(selected))
 	}
-	if e = Prepare(context.Background(), filepath.Join(root, "batch"), selected); e != nil {
+	if e = stageBatch(context.Background(), filepath.Join(root, "batch"), selected); e != nil {
 		t.Fatal(e)
 	}
 }

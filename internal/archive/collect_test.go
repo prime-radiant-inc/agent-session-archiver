@@ -1,9 +1,11 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"github.com/klauspost/compress/zstd"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,7 +103,7 @@ func TestFileHarnessCollection(t *testing.T) {
 		}
 	}
 	batch := filepath.Join(d, "batch")
-	if err := Prepare(context.Background(), batch, inv.Traces); err != nil {
+	if err := stageBatch(context.Background(), batch, inv.Traces); err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range inv.Traces {
@@ -147,13 +149,12 @@ func TestBoundedCapture(t *testing.T) {
 		t.Fatal(e)
 	}
 	put(t, p, "evil")
-	out := filepath.Join(d, "copy")
-	if _, e = copyOpened(f, info, out, false); e != nil {
+	var out bytes.Buffer
+	if _, e = captureOpened(f, info, &out, false); e != nil {
 		t.Fatal(e)
 	}
-	got, _ := os.ReadFile(out)
-	if string(got) != "abc" {
-		t.Fatal(string(got))
+	if out.String() != "abc" {
+		t.Fatal(out.String())
 	}
 	f2, _ := os.Open(p)
 	defer f2.Close()
@@ -161,7 +162,7 @@ func TestBoundedCapture(t *testing.T) {
 	if e = os.Truncate(p, 1); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = copyOpened(f2, i2, filepath.Join(d, "short"), false); e == nil {
+	if _, e = captureOpened(f2, i2, io.Discard, false); e == nil {
 		t.Fatal("short read accepted")
 	}
 	put(t, p, "abc")
@@ -171,15 +172,15 @@ func TestBoundedCapture(t *testing.T) {
 	a, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0600)
 	a.WriteString("def")
 	a.Close()
-	if _, e = copyOpened(f3, i3, filepath.Join(d, "append"), false); e != nil {
+	out.Reset()
+	if _, e = captureOpened(f3, i3, &out, false); e != nil {
 		t.Fatal(e)
 	}
-	got, _ = os.ReadFile(filepath.Join(d, "append"))
-	if string(got) != "abc" {
+	if out.String() != "abc" {
 		t.Fatal("unbounded read")
 	}
 	f3.Seek(0, 0)
-	if _, e = copyOpened(f3, i3, filepath.Join(d, "mutable"), true); e == nil {
+	if _, e = captureOpened(f3, i3, io.Discard, true); e == nil {
 		t.Fatal("mutable change accepted")
 	}
 }
@@ -198,7 +199,7 @@ func TestSelectOnlyChangedMembers(t *testing.T) {
 		t.Fatal(e)
 	}
 	first := filepath.Join(d, "first")
-	if e := Prepare(context.Background(), first, []Manifest{m}); e != nil {
+	if e := stageBatch(context.Background(), first, []Manifest{m}); e != nil {
 		t.Fatal(e)
 	}
 	old, _ := ReadBatch(first)
@@ -208,7 +209,7 @@ func TestSelectOnlyChangedMembers(t *testing.T) {
 	addMember(&m, b, "b", true)
 	selected := Select([]Manifest{m}, map[string]Manifest{m.ID: old[0]}, false)
 	second := filepath.Join(d, "second")
-	if e := Prepare(context.Background(), second, selected); e != nil {
+	if e := stageBatch(context.Background(), second, selected); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := os.Stat(filepath.Join(second, m.Dir(), "raw/a")); !os.IsNotExist(e) {
@@ -363,7 +364,7 @@ archives=["~/old-pi"]
 		}
 	}
 	batch := t.TempDir()
-	if err := Prepare(context.Background(), batch, inv.Traces); err != nil {
+	if err := stageBatch(context.Background(), batch, inv.Traces); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(d, "history/project/old-summary.txt"))

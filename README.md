@@ -3,14 +3,14 @@
 Preserve original agent session traces as ordinary files on an archive server,
 independently of AgentsView or other viewers.
 
-One Go executable discovers native files, transfers changed captures with rsync over
-SSH, and safely incorporates them. Push and pull use the same host configuration.
+One Go executable discovers native files, streams changed captures over SSH, and
+safely incorporates them. Push and pull use the same host configuration.
 Source deletion never deletes committed traces; truncated or conflicting transcripts
 are rejected. SQLite is used only through the optional sqlite3 CLI for OpenCode.
 
 ## Build and run
 
-Requires Go 1.22+ to build, and SSH plus rsync 3.x on both endpoints. Install the
+Requires Go 1.22+ to build, and SSH on both endpoints. Install the
 executable on each endpoint's noninteractive SSH PATH. OpenCode sources also need
 sqlite3 with JSON output support.
 

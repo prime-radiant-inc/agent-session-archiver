@@ -1,24 +1,33 @@
 package archive
 
 import (
+	"archive/tar"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 )
 
-func Prepare(ctx context.Context, batch string, traces []Manifest) error {
-	if err := os.MkdirAll(batch, 0700); err != nil {
-		return err
-	}
+// batchManifest is the stream's final entry. Its arrival is the only evidence
+// that every member before it was captured and transferred completely.
+const batchManifest = "batch.json"
+
+// WriteBatch captures the selected members of traces as a tar stream. Each member
+// is read through one descriptor, bounded to its size when opened, and hashed as
+// it is written; the completed manifests follow as the last entry. A capture
+// failure ends the stream without that entry, so receivers never publish it.
+func WriteBatch(ctx context.Context, w io.Writer, traces []Manifest) error {
 	type captured struct {
-		path   string
+		name   string
 		member Member
 	}
+	tw := tar.NewWriter(w)
 	copies := map[string]captured{}
 	for i := range traces {
 		m := &traces[i]
@@ -42,15 +51,15 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 			if e != nil {
 				return e
 			}
-			dest := filepath.Join(batch, m.Dir(), "raw", v.Path)
+			name := path.Join(filepath.ToSlash(m.Dir()), "raw", filepath.ToSlash(v.Path))
 			if prior, ok := copies[key]; ok && prior.member.Mutable == v.Mutable {
-				if e = stageLink(prior.path, dest); e != nil {
+				if e = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeLink, Name: name, Linkname: prior.name, Mode: 0600}); e != nil {
 					return e
 				}
 				v.Size = prior.member.Size
 				v.Mtime = prior.member.Mtime
 				v.SHA256 = prior.member.SHA256
-				copies[key] = captured{dest, *v}
+				copies[key] = captured{name, *v}
 				continue
 			}
 			f, e := os.Open(source)
@@ -58,11 +67,13 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 				return e
 			}
 			info, e := f.Stat()
-			if e != nil {
-				f.Close()
-				return e
+			if e == nil {
+				e = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Size: info.Size(), Mode: 0600})
 			}
-			sum, e := copyOpened(f, info, filepath.Join(batch, m.Dir(), "raw", v.Path), v.Mutable)
+			var sum string
+			if e == nil {
+				sum, e = captureOpened(f, info, tw, v.Mutable)
+			}
 			f.Close()
 			if e != nil {
 				return e
@@ -73,31 +84,32 @@ func Prepare(ctx context.Context, batch string, traces []Manifest) error {
 				v.Mtime = 0
 			}
 			v.SHA256 = sum
-			copies[key] = captured{dest, *v}
+			copies[key] = captured{name, *v}
 		}
 	}
-	return writeJSON(filepath.Join(batch, "batch.json"), traces)
+	b, e := json.MarshalIndent(traces, "", "  ")
+	if e != nil {
+		return e
+	}
+	b = append(b, '\n')
+	if e = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: batchManifest, Size: int64(len(b)), Mode: 0600}); e != nil {
+		return e
+	}
+	if _, e = tw.Write(b); e != nil {
+		return e
+	}
+	return tw.Close()
 }
-func copyOpened(f *os.File, info os.FileInfo, dest string, mutable bool) (string, error) {
+
+// captureOpened copies exactly the size f had when info was taken. Append-only
+// growth after that is picked up by a later capture; a mutable member must not
+// change at all while it is read.
+func captureOpened(f *os.File, info os.FileInfo, w io.Writer, mutable bool) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("not a regular source")
 	}
-	if e := os.MkdirAll(filepath.Dir(dest), 0700); e != nil {
-		return "", e
-	}
-	out, e := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if e != nil {
-		return "", e
-	}
-	ok := false
-	defer func() {
-		out.Close()
-		if !ok {
-			os.Remove(dest)
-		}
-	}()
 	h := sha256.New()
-	if _, e = io.CopyN(io.MultiWriter(out, h), f, info.Size()); e != nil {
+	if _, e := io.CopyN(io.MultiWriter(w, h), f, info.Size()); e != nil {
 		return "", e
 	}
 	after, e := f.Stat()
@@ -107,12 +119,77 @@ func copyOpened(f *os.File, info os.FileInfo, dest string, mutable bool) (string
 	if after.Size() < info.Size() || mutable && (after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime())) {
 		return "", fmt.Errorf("source changed during capture: %s", f.Name())
 	}
-
-	if e = out.Close(); e != nil {
-		return "", e
-	}
-	ok = true
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ReceiveBatch unpacks a WriteBatch stream into an empty incoming batch
+// directory. It accepts only regular files and hard links to entries already
+// received, all confined to the batch, and writes batch.json only once the
+// stream has ended cleanly after it. Members are not flushed: incorporation
+// verifies them and publishes durable copies.
+func ReceiveBatch(r io.Reader, batch string) error {
+	tr := tar.NewReader(r)
+	received := map[string]string{}
+	var manifest []byte
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return e
+		}
+		if manifest != nil {
+			return fmt.Errorf("batch stream continues after %s", batchManifest)
+		}
+		if !filepath.IsLocal(h.Name) || path.Clean(h.Name) != h.Name || received[h.Name] != "" {
+			return fmt.Errorf("invalid batch entry %q", h.Name)
+		}
+		if h.Name == batchManifest {
+			if h.Typeflag != tar.TypeReg {
+				return fmt.Errorf("invalid %s entry", batchManifest)
+			}
+			if manifest, e = io.ReadAll(tr); e != nil {
+				return e
+			}
+			continue
+		}
+		dest, e := checkedPath(batch, filepath.FromSlash(h.Name))
+		if e != nil {
+			return e
+		}
+		if e = os.MkdirAll(filepath.Dir(dest), 0700); e != nil {
+			return e
+		}
+		switch h.Typeflag {
+		case tar.TypeReg:
+			e = receiveFile(tr, dest)
+		case tar.TypeLink:
+			prior := received[h.Linkname]
+			if prior == "" {
+				return fmt.Errorf("batch entry %q links to unknown %q", h.Name, h.Linkname)
+			}
+			e = os.Link(prior, dest)
+		default:
+			return fmt.Errorf("unsupported batch entry %q", h.Name)
+		}
+		if e != nil {
+			return e
+		}
+		received[h.Name] = dest
+	}
+	if manifest == nil {
+		return fmt.Errorf("batch stream ended without %s", batchManifest)
+	}
+	return writeFile(filepath.Join(batch, batchManifest), manifest)
+}
+func receiveFile(r io.Reader, dest string) error {
+	out, e := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if e != nil {
+		return e
+	}
+	_, e = io.Copy(out, r)
+	return errors.Join(e, out.Close())
 }
 func ReadBatch(dir string) ([]Manifest, error) {
 	var m []Manifest
@@ -123,21 +200,26 @@ func ReadBatch(dir string) ([]Manifest, error) {
 	e = json.Unmarshal(b, &m)
 	return m, e
 }
-func writeJSON(path string, v any) error {
+func writeJSON(p string, v any) error {
 	b, e := json.MarshalIndent(v, "", "  ")
 	if e != nil {
 		return e
 	}
-	if e = os.MkdirAll(filepath.Dir(path), 0700); e != nil {
+	return writeFile(p, append(b, '\n'))
+}
+
+// writeFile publishes b at p through a synced temporary file and rename.
+func writeFile(p string, b []byte) error {
+	if e := os.MkdirAll(filepath.Dir(p), 0700); e != nil {
 		return e
 	}
-	f, e := os.CreateTemp(filepath.Dir(path), ".metadata-")
+	f, e := os.CreateTemp(filepath.Dir(p), ".metadata-")
 	if e != nil {
 		return e
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
-	if _, e = f.Write(append(b, '\n')); e == nil {
+	if _, e = f.Write(b); e == nil {
 		e = f.Sync()
 	}
 	ce := f.Close()
@@ -147,35 +229,13 @@ func writeJSON(path string, v any) error {
 	if e != nil {
 		return e
 	}
-	if e = os.Rename(tmp, path); e != nil {
+	if e = os.Rename(tmp, p); e != nil {
 		return e
 	}
-	d, e := os.Open(filepath.Dir(path))
+	d, e := os.Open(filepath.Dir(p))
 	if e != nil {
 		return e
 	}
 	defer d.Close()
 	return d.Sync()
-}
-
-// Source batches are disposable and validated after transfer. Durability barriers
-// belong to archive publication, not these private temporary copies.
-func stageLink(src, dest string) error {
-	if e := os.MkdirAll(filepath.Dir(dest), 0700); e != nil {
-		return e
-	}
-	if e := os.Link(src, dest); e == nil {
-		return nil
-	}
-	f, e := os.Open(src)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	info, e := f.Stat()
-	if e != nil {
-		return e
-	}
-	_, e = copyOpened(f, info, dest, false)
-	return e
 }

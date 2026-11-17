@@ -173,7 +173,10 @@ func ReceiveBatch(r io.Reader, batch string) error {
 			}
 			continue
 		}
-		if i := strings.Index(h.Name, "/raw/"); i <= 0 || i+len("/raw/") == len(h.Name) {
+		// Members live under <user>/...; a first component named like a batch
+		// marker would shadow the file recovery reads.
+		first, _, _ := strings.Cut(h.Name, "/")
+		if i := strings.Index(h.Name, "/raw/"); i <= 0 || i+len("/raw/") == len(h.Name) || first == batchManifest || first == "ready.json" {
 			return fmt.Errorf("batch entry %q is not a trace member", h.Name)
 		}
 		dest, e := checkedPath(batch, filepath.FromSlash(h.Name))

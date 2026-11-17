@@ -94,17 +94,19 @@ func TestReceiveBatchRejectsUnsafeStreams(t *testing.T) {
 	}
 	file := func(name, body string) entry { return entry{name: name, kind: tar.TypeReg, body: body} }
 	cases := map[string][]entry{
-		"parent escape":           {file("../escape", "x"), file("batch.json", "[]")},
-		"absolute path":           {file("/tmp/escape", "x"), file("batch.json", "[]")},
-		"unclean path":            {file("a/../b", "x"), file("batch.json", "[]")},
-		"symlink":                 {{name: "link", link: "/etc/passwd", kind: tar.TypeSymlink}, file("batch.json", "[]")},
-		"link to unseen entry":    {{name: "copy", link: "missing", kind: tar.TypeLink}, file("batch.json", "[]")},
-		"entry after batch.json":  {file("batch.json", "[]"), file("late", "x")},
-		"duplicate entry":         {file("a", "x"), file("a", "y"), file("batch.json", "[]")},
-		"no batch.json":           {file("a", "x")},
-		"recovery marker":         {file("ready.json", "bad"), file("batch.json", "[]")},
-		"member outside raw":      {file("u/h/p/claude/id/trace.json", "{}"), file("batch.json", "[]")},
-		"batch.json as hard link": {file("a", "[]"), {name: "batch.json", link: "a", kind: tar.TypeLink}},
+		"parent escape":             {file("../escape", "x"), file("batch.json", "[]")},
+		"absolute path":             {file("/tmp/escape", "x"), file("batch.json", "[]")},
+		"unclean path":              {file("a/../b", "x"), file("batch.json", "[]")},
+		"symlink":                   {{name: "link", link: "/etc/passwd", kind: tar.TypeSymlink}, file("batch.json", "[]")},
+		"link to unseen entry":      {{name: "copy", link: "missing", kind: tar.TypeLink}, file("batch.json", "[]")},
+		"entry after batch.json":    {file("batch.json", "[]"), file("late", "x")},
+		"duplicate entry":           {file("a", "x"), file("a", "y"), file("batch.json", "[]")},
+		"no batch.json":             {file("a", "x")},
+		"recovery marker":           {file("ready.json", "bad"), file("batch.json", "[]")},
+		"recovery marker directory": {file("ready.json/raw/x", "x"), file("batch.json", "[]")},
+		"manifest directory":        {file("batch.json/raw/x", "x")},
+		"member outside raw":        {file("u/h/p/claude/id/trace.json", "{}"), file("batch.json", "[]")},
+		"batch.json as hard link":   {file("a", "[]"), {name: "batch.json", link: "a", kind: tar.TypeLink}},
 	}
 	for name, entries := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -170,6 +170,20 @@ func TestSSHPushPull(t *testing.T) {
 			t.Fatalf("interrupted pull left an outgoing batch on the source: %s", p)
 		}
 	}
+	// When the source also refuses cleanup, the pull must report that alongside the transfer failure.
+	sshWrapper := filepath.Join(bin, "ssh")
+	sshScript, _ := os.ReadFile(sshWrapper)
+	put(t, sshWrapper, "#!/bin/sh\ncase \"$*\" in *_helper) req=$(cat); case \"$req\" in *'\"op\":\"cleanup\"'*) echo 'cleanup refused' >&2; exit 1;; esac; printf %s \"$req\" | '"+realSSH+"' -F '"+filepath.Join(d, "ssh_config")+"' \"$@\"; exit $?;; esac\nexec '"+realSSH+"' -F '"+filepath.Join(d, "ssh_config")+"' \"$@\"\n")
+	_, e = Pull(context.Background(), h, root, false)
+	put(t, sshWrapper, string(sshScript))
+	for p := range outgoing() {
+		if !before[p] {
+			os.RemoveAll(p)
+		}
+	}
+	if e == nil || !strings.Contains(e.Error(), "incoming retained") || !strings.Contains(e.Error(), "cleanup refused") {
+		t.Fatalf("pull with refused cleanup: %v", e)
+	}
 	os.Remove(wrapper)
 	if e = Verify(root); e != nil {
 		t.Fatal(e)

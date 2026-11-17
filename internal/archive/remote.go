@@ -179,9 +179,8 @@ func Pull(ctx context.Context, h Host, root string, full bool) (result Result, e
 	}
 	// The source's outgoing batch is only a copy; remove it whether or not this pull succeeds.
 	defer func() {
-		if _, e := remote(context.Background(), h.SSH, request{Op: "cleanup", Batch: prepared.Batch}); e != nil && err == nil {
-			err = e
-		}
+		_, e := remote(context.Background(), h.SSH, request{Op: "cleanup", Batch: prepared.Batch})
+		err = errors.Join(err, e)
 	}()
 	if e = transfer(ctx, h.SSH+":"+prepared.Batch+"/", selection.Batch+"/"); e != nil {
 		return result, fmt.Errorf("incoming retained at %s: %w", selection.Batch, e)

@@ -31,6 +31,10 @@ func TestRecoveryDoesNotBlockOtherHosts(t *testing.T) {
 		t.Fatal(e)
 	}
 	b, m := makeBatch(t, root, src, "old\nnew\n")
+	// Ready batches are replayed by recovery; tampering makes this one fail there.
+	if e := MarkReady(root, b); e != nil {
+		t.Fatal(e)
+	}
 	put(t, filepath.Join(b, m.Dir(), "raw/session.jsonl"), "tampered\n")
 	if e := Incorporate(root, b); e == nil {
 		t.Fatal("tampered batch incorporated")

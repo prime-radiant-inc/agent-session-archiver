@@ -235,9 +235,9 @@ func incorporate(root, batch string, install func(string, string) error) error {
 	if e = batchMembers(root, batch, traces, existing); e != nil {
 		return e
 	}
-	// Preflight every update before publishing any file from the batch. An
-	// append-only member that changed other than by appending was rewritten at the
-	// source; its archived version is kept before the new one replaces it.
+	// Preflight every update before replacing any archived file. An append-only
+	// member that changed other than by appending was rewritten at the source; its
+	// archived version is linked and recorded here, which only adds to the archive.
 	for _, m := range traces {
 		var rewritten []Member
 		for _, v := range m.Members {
@@ -377,7 +377,12 @@ func hasPrefix(p, prefix string) (bool, error) {
 	for {
 		n, e := a.Read(x)
 		if n > 0 {
-			if _, err := io.ReadFull(b, y[:n]); err != nil || !bytes.Equal(x[:n], y[:n]) {
+			if _, err := io.ReadFull(b, y[:n]); err == io.EOF || err == io.ErrUnexpectedEOF {
+				return false, nil
+			} else if err != nil {
+				return false, err
+			}
+			if !bytes.Equal(x[:n], y[:n]) {
 				return false, nil
 			}
 		}
@@ -427,6 +432,9 @@ func keepSuperseded(root string, m Manifest, rewritten []Member) error {
 		}
 		kept := prior[v.Path]
 		kept.Path = supersededPath(v.Path, sum)
+		if recorded, ok := prior[kept.Path]; ok && recorded.SHA256 != sum {
+			return fmt.Errorf("superseded name %s already holds other bytes", kept.Path)
+		}
 		kept.Size = size
 		kept.SHA256 = sum
 		kept.Mutable = false

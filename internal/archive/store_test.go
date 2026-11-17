@@ -243,3 +243,105 @@ func TestInterruptedRewriteKeepsSupersededVersion(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+func stagedBatch(t *testing.T, root string, traces ...Manifest) string {
+	t.Helper()
+	b, e := NewIncoming(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = stageBatch(context.Background(), b, traces); e != nil {
+		t.Fatal(e)
+	}
+	return b
+}
+func TestRewriteReplayAfterCurrentInstalled(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "archive")
+	d := t.TempDir()
+	transcript, companion := filepath.Join(d, "s.jsonl"), filepath.Join(d, "s.txt")
+	trace := func() Manifest {
+		m := Manifest{Version: 1, User: "u", Host: "h", Harness: "claude", Root: d, NativeID: "id", Project: "project"}
+		m.ID = TraceID(m.User, m.Host, m.Harness, m.Root, m.NativeID)
+		addMember(&m, transcript, "session.jsonl", false)
+		addMember(&m, companion, "z.txt", true)
+		return m
+	}
+	put(t, transcript, "original\n")
+	put(t, companion, "c1")
+	m := trace()
+	if e := Incorporate(root, stagedBatch(t, root, m)); e != nil {
+		t.Fatal(e)
+	}
+	put(t, transcript, "rewritten\n")
+	put(t, companion, "c2")
+	b := stagedBatch(t, root, trace())
+	// Crash after the rewritten transcript is installed but before the companion and manifest.
+	crash, calls := errors.New("crash"), 0
+	if e := incorporate(root, b, func(src, dest string) error {
+		if calls++; calls == 1 {
+			return installFile(src, dest)
+		}
+		return crash
+	}); !errors.Is(e, crash) {
+		t.Fatal(e)
+	}
+	if e := Recover(root); e != nil {
+		t.Fatal(e)
+	}
+	if all, _ := LoadManifests(root); len(all[m.ID].Members) != 3 {
+		t.Fatalf("members after replay: %+v", all[m.ID].Members)
+	}
+	if e := Verify(root); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestRewriteAfterSupersededLinkOnly(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "archive")
+	src := filepath.Join(t.TempDir(), "source")
+	b, m := makeBatch(t, root, src, "original\n")
+	if e := Incorporate(root, b); e != nil {
+		t.Fatal(e)
+	}
+	// An earlier attempt linked the superseded version but stopped before recording it.
+	dest := filepath.Join(root, m.Dir(), "raw/session.jsonl")
+	if e := os.Link(dest, filepath.Join(root, m.Dir(), "raw", supersededPath("session.jsonl", digest("original\n")))); e != nil {
+		t.Fatal(e)
+	}
+	b, _ = makeBatch(t, root, src, "rewritten\n")
+	if e := Incorporate(root, b); e != nil {
+		t.Fatal(e)
+	}
+	if all, _ := LoadManifests(root); len(all[m.ID].Members) != 2 {
+		t.Fatalf("members: %+v", all[m.ID].Members)
+	}
+	if e := Verify(root); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestSupersededNameCollisionIsRefused(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "archive")
+	src := filepath.Join(t.TempDir(), "source")
+	b, m := makeBatch(t, root, src, "original\n")
+	if e := Incorporate(root, b); e != nil {
+		t.Fatal(e)
+	}
+	// Record different bytes under the name the next rewrite would use.
+	name := supersededPath("session.jsonl", digest("original\n"))
+	kept := filepath.Join(root, m.Dir(), "raw", name)
+	put(t, kept, "other\n")
+	all, _ := LoadManifests(root)
+	record := all[m.ID]
+	record.Members = append(record.Members, Member{Path: name, Size: 6, SHA256: digest("other\n")})
+	if e := writeJSON(filepath.Join(root, m.Dir(), "trace.json"), record); e != nil {
+		t.Fatal(e)
+	}
+	b, _ = makeBatch(t, root, src, "rewritten\n")
+	if e := Incorporate(root, b); e == nil {
+		t.Fatal("colliding superseded name accepted")
+	}
+	if got, _ := os.ReadFile(kept); string(got) != "other\n" {
+		t.Fatalf("kept version overwritten: %q", got)
+	}
+	if e := Verify(root); e != nil {
+		t.Fatal(e)
+	}
+}

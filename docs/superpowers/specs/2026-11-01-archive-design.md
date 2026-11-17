@@ -100,8 +100,10 @@ Copy known companion files alongside the trace; accept modest duplication instea
 of introducing a shared-object system. Record relationships already present in source
 metadata when useful, but do not resolve a global session graph.
 
-For append-only transcripts, existing archived bytes must be a prefix of incoming
-bytes. Reject shrinkage or disagreement without replacing the archive. Source absence
+For append-only transcripts, existing archived bytes are normally a prefix of incoming
+bytes. (Revised 2026-11-16: shrinkage or disagreement used to be rejected, which let one
+rewritten transcript block its host indefinitely. The incoming bytes now become current
+and the replaced bytes are kept as a checksum-named superseded member.) Source absence
 never deletes archive members. Adapters explicitly identify mutable companions.
 
 There is no atomic snapshot across independently changing files. Capture a bounded

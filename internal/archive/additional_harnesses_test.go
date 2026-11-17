@@ -91,8 +91,13 @@ func TestGrokCapturesWholeSessionAndRetainsTranscript(t *testing.T) {
 		t.Fatalf("companion did not refresh: %s %v", retained, err)
 	}
 	put(t, filepath.Join(session, "chat_history.jsonl"), "first\n")
-	if e := capture(); e == nil {
-		t.Fatal("transcript shrink accepted")
+	if e := capture(); e != nil {
+		t.Fatal(e)
+	}
+	history := "sessions/%2Fgone/session-id/chat_history.jsonl"
+	kept, err := os.ReadFile(filepath.Join(root, m.Dir(), "raw", supersededPath(history, digest("first\nsecond\n"))))
+	if err != nil || string(kept) != "first\nsecond\n" {
+		t.Fatalf("shrunk transcript lost its longer version: %q %v", kept, err)
 	}
 	if e := os.RemoveAll(filepath.Join(home, ".grok")); e != nil {
 		t.Fatal(e)

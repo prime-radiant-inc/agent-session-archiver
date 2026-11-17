@@ -20,3 +20,8 @@ alongside session manifests, and missing references fail verification.
 Raw paths are ordinary files, and byte-identical companions may share an inode within
 a captured batch. Their manifests remain independent. Writers replace paths through
 rename and never modify linked contents in place. Copy files out before editing.
+
+Append-only transcripts normally only grow. When a source rewrites or truncates one,
+the new bytes take the member's path and the replaced bytes stay in the same raw
+directory as `<member>.superseded-<first 12 hex of their SHA-256>`, listed in
+trace.json as their own member and checked by verification like any other.

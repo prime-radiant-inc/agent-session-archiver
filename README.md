@@ -5,8 +5,9 @@ independently of AgentsView or other viewers.
 
 One Go executable discovers native files, streams changed captures over SSH, and
 safely incorporates them. Push and pull use the same host configuration.
-Source deletion never deletes committed traces; truncated or conflicting transcripts
-are rejected. SQLite is used only through the optional sqlite3 CLI for OpenCode.
+Source deletion never deletes committed traces. A transcript rewritten or truncated
+at the source becomes current, and every replaced version is kept beside it.
+SQLite is used only through the optional sqlite3 CLI for OpenCode.
 
 ## Build and run
 

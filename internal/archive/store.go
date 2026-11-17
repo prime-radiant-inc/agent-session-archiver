@@ -235,8 +235,11 @@ func incorporate(root, batch string, install func(string, string) error) error {
 	if e = batchMembers(root, batch, traces, existing); e != nil {
 		return e
 	}
-	// Preflight every update before publishing any file from the batch.
+	// Preflight every update before replacing any archived file. An append-only
+	// member that changed other than by appending was rewritten at the source; its
+	// archived version is linked and recorded here, which only adds to the archive.
 	for _, m := range traces {
+		var rewritten []Member
 		for _, v := range m.Members {
 			rel := filepath.Join(m.Dir(), "raw", v.Path)
 			dest, e := checkedPath(root, filepath.Join(placed(m, existing).Dir(), "raw", v.Path))
@@ -249,13 +252,20 @@ func incorporate(root, batch string, install func(string, string) error) error {
 			}
 			if _, e = os.Stat(dest); e == nil && !v.Mutable {
 				if _, e = os.Stat(src); e == nil {
-					if e = checkPrefix(dest, src); e != nil {
+					appended, e := hasPrefix(src, dest)
+					if e != nil {
 						return e
+					}
+					if !appended {
+						rewritten = append(rewritten, v)
 					}
 				}
 			} else if e != nil && !os.IsNotExist(e) {
 				return e
 			}
+		}
+		if e = keepSuperseded(root, placed(m, existing), rewritten); e != nil {
+			return e
 		}
 	}
 	installed := map[string]string{}
@@ -349,15 +359,17 @@ func installFile(src, dest string) error {
 	defer d.Close()
 	return d.Sync()
 }
-func checkPrefix(old, new string) error {
-	a, e := os.Open(old)
+
+// hasPrefix reports whether the file at p begins with the bytes of the file at prefix.
+func hasPrefix(p, prefix string) (bool, error) {
+	a, e := os.Open(prefix)
 	if e != nil {
-		return e
+		return false, e
 	}
 	defer a.Close()
-	b, e := os.Open(new)
+	b, e := os.Open(p)
 	if e != nil {
-		return e
+		return false, e
 	}
 	defer b.Close()
 	x := make([]byte, 65536)
@@ -365,17 +377,82 @@ func checkPrefix(old, new string) error {
 	for {
 		n, e := a.Read(x)
 		if n > 0 {
-			if _, err := io.ReadFull(b, y[:n]); err != nil || !bytes.Equal(x[:n], y[:n]) {
-				return fmt.Errorf("transcript conflict; retaining %s", old)
+			if _, err := io.ReadFull(b, y[:n]); err == io.EOF || err == io.ErrUnexpectedEOF {
+				return false, nil
+			} else if err != nil {
+				return false, err
+			}
+			if !bytes.Equal(x[:n], y[:n]) {
+				return false, nil
 			}
 		}
 		if e == io.EOF {
-			return nil
+			return true, nil
 		}
+		if e != nil {
+			return false, e
+		}
+	}
+}
+
+// supersededPath names a replaced version of member p by its checksum.
+func supersededPath(p, sum string) string { return p + ".superseded-" + sum[:12] }
+
+// keepSuperseded links each rewritten member's archived bytes to its superseded
+// path and records that member in the trace manifest before anything replaces
+// the current path, so an interrupted incorporation cannot lose them.
+func keepSuperseded(root string, m Manifest, rewritten []Member) error {
+	if len(rewritten) == 0 {
+		return nil
+	}
+	path, e := checkedPath(root, filepath.Join(m.Dir(), m.metadataName()))
+	if e != nil {
+		return e
+	}
+	record, e := readManifest(path)
+	if os.IsNotExist(e) {
+		record = m
+		record.Members = nil
+	} else if e != nil {
+		return e
+	}
+	record.CaptureRoot = ""
+	prior := map[string]Member{}
+	for _, v := range record.Members {
+		prior[v.Path] = v
+	}
+	for _, v := range rewritten {
+		current, e := checkedPath(root, filepath.Join(m.Dir(), "raw", v.Path))
 		if e != nil {
 			return e
 		}
+		sum, size, e := hashFile(current)
+		if e != nil {
+			return e
+		}
+		kept := prior[v.Path]
+		kept.Path = supersededPath(v.Path, sum)
+		if recorded, ok := prior[kept.Path]; ok && recorded.SHA256 != sum {
+			return fmt.Errorf("superseded name %s already holds other bytes", kept.Path)
+		}
+		kept.Size = size
+		kept.SHA256 = sum
+		kept.Mutable = false
+		dest, e := checkedPath(root, filepath.Join(m.Dir(), "raw", kept.Path))
+		if e != nil {
+			return e
+		}
+		if checkMember(dest, kept) != nil {
+			if e = installLink(current, dest); e != nil {
+				return e
+			}
+		}
+		if _, ok := prior[kept.Path]; !ok {
+			record.Members = append(record.Members, kept)
+			prior[kept.Path] = kept
+		}
 	}
+	return writeJSON(path, record)
 }
 func Recover(root string) error { return recoverHost(root, "", "") }
 func recoverHost(root, user, host string) error {

@@ -1,0 +1,52 @@
+#!/bin/sh
+# Install this checkout's agent-session-archiver on SSH endpoints.
+#
+# Usage: scripts/install-endpoints SSH-ALIAS...
+#
+# Use it to roll out a new version. Helpers on every endpoint must speak the
+# same protocol, so pause scheduled runs first and install on all endpoints in
+# one go. For each alias it detects the OS and architecture, builds a static
+# binary, copies it to ~/.local/bin/agent-session-archiver (keeping the old one as
+# agent-session-archiver.prev for rollback), checks its hash, and asks the
+# installed helper for an empty batch stream. A failed endpoint is reported and
+# the rest continue; the exit status is 1 if any failed.
+set -u
+if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+	sed -n '2,12s/^# \{0,1\}//p' "$0"
+	exit 2
+fi
+repo=$(cd "$(dirname "$0")/.." && pwd)
+build=$(mktemp -d "${TMPDIR:-/tmp}/install-endpoints.XXXXXX")
+trap 'rm -f "$build"/*; rmdir "$build"' EXIT
+dest='.local/bin/agent-session-archiver'
+failed=0
+fail() {
+	echo "$1: FAILED: $2"
+	failed=1
+}
+for host in "$@"; do
+	platform=$(ssh -oBatchMode=yes -oConnectTimeout=10 "$host" uname -sm 2>&1) || { fail "$host" "ssh: $platform"; continue; }
+	case "$platform" in
+	"Linux x86_64") target=linux/amd64 ;;
+	"Linux aarch64") target=linux/arm64 ;;
+	"Darwin arm64") target=darwin/arm64 ;;
+	"Darwin x86_64") target=darwin/amd64 ;;
+	*) fail "$host" "unsupported platform $platform"; continue ;;
+	esac
+	bin="$build/${target%/*}-${target#*/}"
+	if [ ! -x "$bin" ]; then
+		log=$(cd "$repo" && CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o "$bin" ./cmd/agent-session-archiver 2>&1) || { fail "$host" "build $target: $log"; continue; }
+	fi
+	want=$(shasum -a 256 "$bin" | cut -d' ' -f1)
+	out=$(scp -q -oBatchMode=yes "$bin" "$host:$dest.new" 2>&1) || { fail "$host" "copy: $out"; continue; }
+	# The probe needs no sources: an empty selection streams only batch.json.
+	out=$(ssh -oBatchMode=yes "$host" "set -e
+		chmod 755 $dest.new
+		got=\$( (sha256sum $dest.new 2>/dev/null || shasum -a 256 $dest.new) | cut -d' ' -f1)
+		[ \"\$got\" = $want ] || { echo \"hash mismatch: \$got\"; exit 1; }
+		[ ! -e $dest ] || cp -p $dest $dest.prev
+		mv $dest.new $dest
+		printf '{\"op\":\"send\",\"traces\":[]}' | $dest _helper | tar -tf - | grep -qx batch.json || { echo 'helper did not stream a batch'; exit 1; }" 2>&1) || { fail "$host" "$out"; continue; }
+	echo "$host: installed $target $(echo "$want" | cut -c1-12)"
+done
+exit $failed

@@ -14,6 +14,10 @@ Requires Go 1.22+ to build, and SSH on both endpoints. Install the
 executable on each endpoint's noninteractive SSH PATH. OpenCode sources also need
 sqlite3 with JSON output support.
 
+Every endpoint must run the same version. To roll one out, pause scheduled runs and
+run `scripts/install-endpoints` with every endpoint's SSH alias; it builds for each
+platform, installs to `~/.local/bin`, keeps the previous binary and probes the helper.
+
 ```sh
 go build -o bin/agent-session-archiver ./cmd/agent-session-archiver
 agent-session-archiver --config config.toml pull --all
